@@ -1,0 +1,57 @@
+# Codemagic builds Trout Trot on its Macs, signs it with your Apple Developer account,
+# and uploads it to TestFlight. Start a build from the Codemagic dashboard.
+#
+# One-time setup (see SETUP-IPHONE.md):
+#   1. In Codemagic: Team settings → Integrations → Developer Portal → add an
+#      App Store Connect API key, and name it exactly "Trout Trot App Store Connect".
+#   2. Replace APP_STORE_APPLE_ID below with the app's Apple ID from
+#      App Store Connect → Trout Trot → App Information → Apple ID (a 10-digit number).
+workflows:
+  ios-testflight:
+    name: iPhone build to TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: Trout Trot App Store Connect
+    environment:
+      ios_signing:
+        # Codemagic creates or fetches the signing certificate and App Store profile itself.
+        distribution_type: app_store
+        bundle_identifier: com.thomas.trouttrot
+      vars:
+        APP_STORE_APPLE_ID: REPLACE_WITH_10_DIGIT_APPLE_ID
+      node: 22
+      xcode: latest
+    scripts:
+      - name: Install dependencies
+        script: |
+          cd trout-trot-app
+          npm ci
+      - name: Build the game and copy it into the iPhone project
+        script: |
+          cd trout-trot-app
+          node scripts/build-www.mjs
+          npx cap sync ios
+      - name: Apply signing profiles
+        script: xcode-project use-profiles
+      - name: Give this upload the next build number
+        # TestFlight rejects a build number it has already seen, so each upload
+        # takes the latest one on TestFlight plus 1. The version (1.0) is unchanged.
+        script: |
+          cd trout-trot-app/ios/App
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || true)
+          NEXT=$(( ${LATEST:-0} + 1 ))
+          sed -i '' -E "s/CURRENT_PROJECT_VERSION = [0-9]+;/CURRENT_PROJECT_VERSION = $NEXT;/g" App.xcodeproj/project.pbxproj
+          echo "Build number: $NEXT"
+      - name: Build the signed app
+        script: |
+          xcode-project build-ipa \
+            --project "trout-trot-app/ios/App/App.xcodeproj" \
+            --scheme "App"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

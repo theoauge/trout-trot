@@ -1,0 +1,25 @@
+# Libraries: reinstalled with `npm ci`
+node_modules/
+
+# Signing keys, certificates and secrets. These must never be committed.
+# Keep them backed up somewhere safe outside the repository instead.
+*.jks
+*.keystore
+keystore.properties
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*
+
+# Build output
+*.ipa
+*.dSYM.zip
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/

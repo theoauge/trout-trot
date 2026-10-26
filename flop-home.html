@@ -1,0 +1,1154 @@
+<title>Trout Trot</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@600;700;800&display=swap">
+<style>
+/* One-screen top-down river bank: world scaled to fit, river down one side, slim HUD on top, centered cards for start / pause / game over. Single autumn-daylight look by design. */
+:root {
+  --grass: #7c9c52;
+  --river: #2c6f74;
+  --trout: #e3798c;
+  --leaf: #d9822b;
+  --ink: #1f2b22;
+  --muted: #55634f;
+  --card: rgba(250, 249, 243, 0.95);
+  --line: rgba(31, 43, 34, 0.15);
+  --danger: #c8412f;
+  --display: "Fredoka", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif;
+  --body: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+html, body { height: 100%; }
+body {
+  background: var(--grass);
+  color: var(--ink);
+  font-family: var(--body);
+  overflow: hidden;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+button { touch-action: manipulation; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+.hud {
+  position: fixed; top: 0; left: 0; right: 0;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+  padding-bottom: 10px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: linear-gradient(rgba(250, 249, 243, 0.85), rgba(250, 249, 243, 0));
+  pointer-events: none;
+}
+.stat { display: grid; }
+.label { font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.value { font-family: var(--display); font-weight: 700; font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+.meter { display: grid; gap: 4px; min-width: 0; max-width: 260px; justify-self: center; width: 100%; }
+.meter .row { display: flex; justify-content: space-between; gap: 8px; }
+.bar { height: 14px; border-radius: 999px; background: rgba(255, 255, 255, 0.7); border: 2px solid rgba(31, 43, 34, 0.25); overflow: hidden; }
+.fill { height: 100%; width: 100%; background: linear-gradient(90deg, #6fb3ad, var(--river)); border-radius: 999px; }
+.meter.low .fill { background: var(--danger); animation: blink 0.5s steps(2) infinite; }
+.meter.low .label:first-child { color: var(--danger); }
+@keyframes blink { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .meter.low .fill { animation: none; } }
+.icon-btn {
+  pointer-events: auto; width: 40px; height: 40px; border-radius: 50%;
+  border: 2px solid var(--line); background: rgba(255, 255, 255, 0.8); color: var(--ink);
+  font: 700 14px var(--body); cursor: pointer; display: grid; place-items: center;
+}
+.icon-btn:focus-visible, .play:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+
+/* Cards center when they fit and scroll when the screen is too short (small phones, landscape). */
+.overlay {
+  position: fixed; inset: 0; display: flex;
+  overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: rgba(31, 43, 34, 0.25);
+}
+.card {
+  margin: auto; flex-shrink: 0;
+  width: min(370px, 100%); display: grid; gap: 14px; justify-items: center; text-align: center;
+  padding: 26px 22px 24px; background: var(--card); border: 2px solid var(--line); border-radius: 24px;
+  box-shadow: 0 18px 50px rgba(31, 43, 34, 0.3);
+}
+.card h1, .card h2 { margin: 0; font-family: var(--display); font-weight: 700; line-height: 0.95; text-wrap: balance; color: var(--ink); }
+.card h1 { font-size: 48px; }
+.card h1 span { color: var(--trout); }
+.card h2 { font-size: 34px; }
+.place { font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--leaf); }
+.card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 32ch; }
+.rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; text-align: left; font-size: 15px; }
+.rules li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: center; }
+.rules b { font-family: var(--display); font-weight: 700; font-size: 18px; text-align: center; color: var(--river); }
+.result { display: flex; gap: 28px; justify-content: center; }
+.result .stat { justify-items: center; }
+.newbest { color: var(--leaf); font-weight: 800; font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
+.play {
+  margin-top: 4px; min-width: 180px; padding: 13px 28px; border: 0; border-radius: 999px;
+  background: var(--trout); color: #3a0d16; font: 700 22px var(--display); cursor: pointer;
+  box-shadow: 0 5px 0 #b45468;
+}
+.play:active { transform: translateY(3px); box-shadow: 0 2px 0 #b45468; }
+</style>
+
+<canvas id="game" role="img" aria-label="Trout Trot game area: a trout on the bank of a river"></canvas>
+<div class="sr-only" id="announcer" aria-live="polite"></div>
+
+<div class="hud" id="hud" hidden>
+  <div class="stat">
+    <span class="label">Score</span>
+    <span class="value" id="score">0</span>
+  </div>
+  <div class="meter" id="meter">
+    <div class="row"><span class="label">Moisture</span><span class="label" id="levelLabel">Round 1</span></div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+  </div>
+  <button class="icon-btn" id="pauseBtn" aria-label="Pause">II</button>
+</div>
+
+<div class="overlay" id="startScreen" role="dialog" aria-modal="true" aria-labelledby="startTitle">
+  <div class="card">
+    <span class="place">Upper Iowa River · Decorah</span>
+    <h1 id="startTitle">Trout <span>Trot</span></h1>
+    <p>You're a rainbow trout stranded on the river bank. Flop back into the water before you dry out.</p>
+    <ul class="rules">
+      <li><b>↔</b>Swipe side to side to flop. A longer swipe makes a bigger flop.</li>
+      <li><b>•</b>Tap beside the trout for a short hop.</li>
+      <li><b>≈</b>Cold springs top up your moisture.</li>
+      <li><b>!</b>From round 3, dodge the bald eagle's shadow. It gets faster every round.</li>
+      <li><b>→</b>The river is farther away every round.</li>
+    </ul>
+    <p>Every splash back into the river is 1 point.</p>
+    <button class="play" id="startBtn">Flop!</button>
+  </div>
+</div>
+
+<div class="overlay" id="pauseScreen" role="dialog" aria-modal="true" aria-labelledby="pauseTitle" hidden>
+  <div class="card">
+    <h2 id="pauseTitle">Paused</h2>
+    <button class="play" id="resumeBtn">Resume</button>
+  </div>
+</div>
+
+<div class="overlay" id="overScreen" role="dialog" aria-modal="true" aria-labelledby="overTitle" hidden>
+  <div class="card">
+    <h2 id="overTitle">Dried out</h2>
+    <div class="result">
+      <div class="stat"><span class="label">Score</span><span class="value" id="finalScore">0</span></div>
+      <div class="stat"><span class="label">Best</span><span class="value" id="finalBest">0</span></div>
+    </div>
+    <span class="newbest" id="newBest" hidden>New best</span>
+    <button class="play" id="againBtn">Try again</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const ui = {
+    hud: $('hud'), score: $('score'), fill: $('fill'), meter: $('meter'), levelLabel: $('levelLabel'),
+    start: $('startScreen'), pause: $('pauseScreen'), over: $('overScreen'), overTitle: $('overTitle'),
+    finalScore: $('finalScore'), finalBest: $('finalBest'), newBest: $('newBest')
+  };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Screen reader announcements. Clearing first makes a repeated message (another +1) read again.
+  const announcer = $('announcer');
+  function announce(msg) {
+    announcer.textContent = '';
+    setTimeout(() => { announcer.textContent = msg; }, 50);
+  }
+
+  // Top-down world, 860 tall; the bank widens every round (WW) and the camera scrolls sideways
+  // to follow the trout, showing VIEW_W units at a time on a phone. All game logic keeps the
+  // river on the left; when `flip` is set, drawing and input are mirrored so it shows on the right.
+  const VIEW_W = 600, WH = 860, FR = 12, GRAV = 1500, TOP = 95, BOTTOM = WH - 35;
+  let WW = 600, TREES = WW - 52, cam = 0;
+  let W = 0, H = 0, view = { s: 1, oy: 0, w: VIEW_W };
+
+  let mode = 'title'; // title | play | paused | saved | dying | over
+  let level = 1, score = 0, moisture = 100, stateTimer = 0, bannerTimer = 0, hintOn = true, clock = 0, deathBy = 'dry';
+  let best = 0;
+  try { best = parseInt(localStorage.getItem('flop-home-trout-best') || '0', 10) || 0; } catch (e) {}
+
+  const fish = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, angle: Math.PI, cooldown: 0, alpha: 1, lift: 0 };
+  let flip = false, river = { base: 185, amp: 0, phase: 0, far: 60 };
+  let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [], popup = null;
+  let anglers = [], talus = [], cedars = [], ripples = [], place = '';
+  const canoe = { active: false, t: 4, x: 0, y: 0, vy: 0, off: 0, color: '#2f6b4f' };
+  const eagle = { phase: 'off', t: 0, x: 0, y: 0, vx: 0, vy: 0 };
+
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const shoreAt = y => river.base + river.amp * Math.sin(y * 0.011 + river.phase);
+  const farAt = y => river.far + 8 * Math.sin(y * 0.017 + river.phase * 1.7);
+  const PLACES = ['Trout Run', "Dunning's Spring", 'Twin Springs', 'Phelps Park', 'Palisades Park', 'Ice Cave', 'Malanaphy Springs', 'Siewers Spring', 'Will Baker Park', 'Pulpit Rock'];
+  const CANOE_COLORS = ['#2f6b4f', '#b4402f', '#2f5a8a'];
+  const inRiver = () => fish.x < shoreAt(fish.y) - 4 && fish.z < 6;
+  const drainRate = () => Math.min(11, 7 + level * 0.4);
+  const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
+
+  // ---------- level ----------
+  function makeLevel(n) {
+    flip = n > 1 && Math.random() < 0.5;
+    // Each round the trout lands about 160 units (roughly 4 ft) farther from the river.
+    WW = Math.min(600 + (n - 1) * 160, 2200); TREES = WW - 52;
+    river = { base: rnd(178, 192), amp: Math.min(n * 8, 45), phase: rnd(0, 6), far: 60 };
+    place = PLACES[(n - 1) % PLACES.length];
+    fish.x = rnd(WW - 130, TREES - 45); fish.y = rnd(260, WH - 170);
+    fish.z = fish.vx = fish.vy = fish.vz = 0; fish.angle = Math.PI + rnd(-0.6, 0.6);
+    fish.cooldown = 0; fish.alpha = 1; fish.lift = 0; queuedFlop = null;
+    boulders = []; logs = []; springs = []; parts = [];
+
+    const clearOf = (x, y, r) =>
+      Math.hypot(x - fish.x, y - fish.y) > r + 70 &&
+      boulders.every(b => Math.hypot(x - b.x, y - b.y) > r + b.r + 24) &&
+      springs.every(s => Math.hypot(x - s.x, y - s.y) > r + s.r + 20) &&
+      logs.every(l => x + r < l.x - 20 || x - r > l.x + l.w + 20 || y + r < l.y - 20 || y - r > l.y + l.h + 20);
+
+    // Limestone boulders block you; fallen logs are low enough to flop over.
+    const nb = n === 1 ? 1 : Math.min(1 + n + Math.floor((WW - 600) / 250), 16);
+    for (let i = 0, tries = 0; i < nb && tries < 400; tries++) {
+      const r = rnd(20, 32), y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 40, TREES - r - 10);
+      if (clearOf(x, y, r)) { boulders.push({ x, y, r, seed: Math.random() * 6 }); i++; }
+    }
+    const nl = n < 2 ? 0 : Math.min(Math.floor(n / 2) + Math.floor((WW - 600) / 600), 6);
+    for (let i = 0, tries = 0; i < nl && tries < 200; tries++) {
+      const h = rnd(90, 140), y = rnd(TOP, BOTTOM - h), x = rnd(shoreAt(y + h / 2) + 50, TREES - 60);
+      if (clearOf(x + 9, y + h / 2, h / 2)) { logs.push({ x, y, w: 18, h }); i++; }
+    }
+    // More springs on wider banks, since the trip takes longer.
+    const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
+    for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
+      const r = 26, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + 60, TREES - 50);
+      if (clearOf(x, y, r)) { springs.push({ x, y, r, water: 35 }); i++; }
+    }
+
+    leaves = Array.from({ length: Math.round(70 * WW / 600) }, () => {
+      const y = rnd(-100, WH + 100);
+      return { x: rnd(shoreAt(y) + 14, WW + 300), y, a: rnd(0, 6), c: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)] };
+    });
+    pebbles = Array.from({ length: 140 }, () => {
+      const y = rnd(-200, WH + 200);
+      return { y, dx: rnd(-14, 10), r: rnd(2, 5), c: Math.random() < 0.5 ? '#cfc8b8' : '#a9a293' };
+    });
+    buildTrees();
+
+    // Fly anglers wading the shallows, spaced well apart.
+    anglers = [];
+    const na = n === 1 ? 1 : Math.random() < 0.6 ? 2 : 1;
+    for (let i = 0, tries = 0; i < na && tries < 100; tries++) {
+      const y = rnd(TOP + 40, BOTTOM - 40);
+      if (anglers.every(a => Math.abs(a.y - y) > 220)) {
+        anglers.push({ y, x: shoreAt(y) - 30, facing: Math.PI + rnd(-0.35, 0.35), seed: rnd(0, 6) });
+        i++;
+      }
+    }
+    talus = Array.from({ length: 90 }, () => {
+      const y = rnd(-200, WH + 200);
+      return { y, dx: rnd(-6, 8), r: rnd(2, 5), c: Math.random() < 0.5 ? '#d8d0bd' : '#b3a993' };
+    });
+    cedars = Array.from({ length: 26 }, (_, i) => ({
+      y: -120 + i * 42 + rnd(-12, 12), dx: rnd(-34, -12), r: rnd(9, 15),
+      c: Math.random() < 0.6 ? '#3e5a3b' : LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)]
+    }));
+
+    eagle.phase = n >= 3 ? 'idle' : 'off';
+    eagle.t = rnd(2.5, 4);
+    moisture = 100; bannerTimer = 1.6;
+    cam = camTarget();
+    ui.levelLabel.textContent = 'Round ' + n;
+  }
+
+  // ---------- sizing ----------
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const s = Math.min(W / VIEW_W, H / WH);
+    view = { s, oy: (H - WH * s) / 2, w: W / s };
+    cam = camTarget();
+    // A wider window can show deeper woods than were built for this round.
+    if (treeLayer && treeReach() > treeLayer.reach + 1) buildTrees();
+  }
+  // `cam` is the logic x at the river-side edge of the screen. The trout sits about two-thirds
+  // of the way across, so more of the way ahead is in view; the river slides in as it gets close.
+  function camTarget() {
+    if (view.w >= WW + 40) return (WW - view.w) / 2;
+    return Math.max(0, Math.min(WW - view.w, fish.x - view.w * 0.68));
+  }
+  function toWorld(px, py) {
+    const vx = px / view.s;
+    return { x: flip ? cam + view.w - vx : cam + vx, y: (py - view.oy) / view.s };
+  }
+  function toScreen(x, y) {
+    const vx = flip ? cam + view.w - x : x - cam;
+    return { x: vx * view.s, y: view.oy + y * view.s };
+  }
+
+  // ---------- sound ----------
+  let audio = null;
+  function ensureAudio() {
+    if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (audio && audio.state === 'suspended') audio.resume();
+  }
+  function tone(freq, dur, type = 'sine', vol = 0.12, slide = 0) {
+    if (!audio) return;
+    const o = audio.createOscillator(), g = audio.createGain(), now = audio.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, now);
+    if (slide) o.frequency.exponentialRampToValueAtTime(freq * slide, now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g).connect(audio.destination); o.start(now); o.stop(now + dur);
+  }
+  // Splash in two layers: the spray, then droplets landing back on the water.
+  function splashSound() {
+    if (!audio) return;
+    const now = audio.currentTime, sr = audio.sampleRate;
+    const len = Math.floor(sr * 0.7), buf = audio.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2);
+    const src = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+    f.type = 'bandpass'; f.Q.value = 0.8;
+    f.frequency.setValueAtTime(2600, now); f.frequency.exponentialRampToValueAtTime(450, now + 0.6);
+    g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.7, now + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+    src.buffer = buf; src.connect(f).connect(g).connect(audio.destination); src.start(now);
+    for (let i = 0; i < 6; i++) {
+      const t = now + 0.15 + Math.random() * 0.5, fq = 900 + Math.random() * 1000;
+      const o = audio.createOscillator(), og = audio.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(fq, t); o.frequency.exponentialRampToValueAtTime(fq * 1.6, t + 0.05);
+      og.gain.setValueAtTime(0.07, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+      o.connect(og).connect(audio.destination); o.start(t); o.stop(t + 0.07);
+    }
+  }
+
+  // ---------- flow ----------
+  function startGame() {
+    ensureAudio();
+    level = 1; score = 0; hintOn = true; popup = null;
+    makeLevel(level);
+    mode = 'play';
+    ui.start.hidden = ui.over.hidden = ui.pause.hidden = true; ui.hud.hidden = false;
+    updateHud();
+    announce('Round 1, ' + place + '. Swipe toward the river.');
+  }
+  // Pause works mid-round and during the splash and dying animations; resume returns to that state.
+  let pausedFrom = 'play';
+  function pauseGame() {
+    if (mode !== 'play' && mode !== 'saved' && mode !== 'dying') return;
+    pausedFrom = mode; mode = 'paused'; queuedFlop = null; ptr = null;
+    ui.pause.hidden = false; $('resumeBtn').focus();
+  }
+  function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
+  function reachRiver() {
+    mode = 'saved'; stateTimer = 1.4;
+    score += 1;
+    eagle.phase = 'off';
+    burst(fish.x, fish.y, 30, '#d6f1ee', 260);
+    ripples.push({ x: fish.x, y: fish.y, age: 0 });
+    splashSound();
+    popup = { text: '+1', x: fish.x, y: fish.y - 30, life: 1.3 };
+    updateHud();
+    announce('Splash! Score ' + score + '.');
+  }
+  function lose(reason) {
+    mode = 'dying'; stateTimer = 1.4; deathBy = reason;
+    if (reason === 'dry') { moisture = 0; tone(300, 0.6, 'triangle', 0.12, 0.4); }
+    else tone(880, 0.5, 'sawtooth', 0.06, 0.5);
+    try { navigator.vibrate && navigator.vibrate(120); } catch (e) {}
+  }
+  function showOver() {
+    mode = 'over';
+    const isBest = score > best;
+    if (isBest) { best = score; try { localStorage.setItem('flop-home-trout-best', String(best)); } catch (e) {} }
+    ui.overTitle.textContent = deathBy === 'eagle' ? 'Snatched by an eagle' : 'Dried out';
+    ui.finalScore.textContent = score; ui.finalBest.textContent = best;
+    ui.newBest.hidden = !isBest || score === 0;
+    ui.hud.hidden = true; ui.over.hidden = false;
+    $('againBtn').focus();
+    announce(ui.overTitle.textContent + '. Score ' + score + ', best ' + best + '.');
+  }
+  function updateHud() {
+    ui.score.textContent = score;
+    ui.fill.style.width = Math.max(0, moisture) + '%';
+    const low = moisture < 25;
+    if (low && mode === 'play' && !ui.meter.classList.contains('low')) announce('Moisture low.');
+    ui.meter.classList.toggle('low', low);
+  }
+
+  // ---------- flops ----------
+  const canFlop = () => mode === 'play' && fish.z === 0 && fish.vz === 0 && fish.cooldown <= 0;
+  // Input buffer: a flop asked for mid-air is remembered and fires the moment the trout lands,
+  // instead of being dropped. Presses older than FLOP_BUFFER seconds are discarded.
+  const FLOP_BUFFER = 0.5;
+  let queuedFlop = null;
+  function requestFlop(dx, dy, mag) {
+    if (mode !== 'play') return;
+    ensureAudio();
+    if (canFlop()) { queuedFlop = null; launch(dx, dy, mag); }
+    else queuedFlop = { dx, dy, mag, age: 0 };
+  }
+  function runQueuedFlop(dt) {
+    if (!queuedFlop) return;
+    queuedFlop.age += dt;
+    if (queuedFlop.age > FLOP_BUFFER) { queuedFlop = null; return; }
+    if (canFlop()) { const q = queuedFlop; queuedFlop = null; launch(q.dx, q.dy, q.mag); }
+  }
+  function launch(dx, dy, mag) {
+    const d = Math.hypot(dx, dy) || 1;
+    fish.vx = dx / d * mag; fish.vy = dy / d * mag; fish.vz = 360; fish.z = 0.01;
+    fish.angle = Math.atan2(fish.vy, fish.vx);
+    fish.cooldown = 0.15; hintOn = false;
+    burst(fish.x, fish.y, 5, '#b9cf8a', 90);
+    tone(170 + Math.random() * 40, 0.12, 'sine', 0.18, 0.6);
+  }
+  function swipeMag(dist) { return Math.max(160, Math.min(480, (dist / view.s) * 3.2)); }
+
+  // ---------- input ----------
+  let ptr = null;
+  cv.addEventListener('pointerdown', e => {
+    if (ptr && ptr.id !== e.pointerId) return; // ignore a second finger until the first lifts
+    ptr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  cv.addEventListener('pointermove', e => { if (ptr && e.pointerId === ptr.id) { ptr.x = e.clientX; ptr.y = e.clientY; } });
+  cv.addEventListener('pointerup', e => {
+    if (!ptr || e.pointerId !== ptr.id) return;
+    const dx = (e.clientX - ptr.x0) * (flip ? -1 : 1), dy = e.clientY - ptr.y0, dist = Math.hypot(dx, dy);
+    const quick = performance.now() - ptr.t0 < 350;
+    ptr = null;
+    if (dist < 14 && quick) {
+      const w = toWorld(e.clientX, e.clientY);
+      requestFlop(w.x - fish.x, w.y - fish.y, 150);
+    } else if (dist >= 14) {
+      requestFlop(dx, dy, swipeMag(dist));
+    }
+  });
+  cv.addEventListener('pointercancel', e => { if (ptr && e.pointerId === ptr.id) ptr = null; });
+  addEventListener('keydown', e => {
+    if (e.key === 'Escape' || e.key === 'p') { mode === 'paused' ? resumeGame() : pauseGame(); return; }
+    const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const d = dirs[e.key];
+    if (!d) return;
+    e.preventDefault();
+    requestFlop(d[0] * (flip ? -1 : 1), d[1], e.shiftKey ? 150 : 320);
+  });
+  // Pause whenever the game loses the player's attention: tab hidden, focus moved away
+  // (notification shade, incoming call, clicking outside), page put in the background or frozen.
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+  addEventListener('blur', pauseGame);
+  addEventListener('pagehide', pauseGame);
+  document.addEventListener('freeze', pauseGame);
+  $('startBtn').addEventListener('click', startGame);
+  $('againBtn').addEventListener('click', startGame);
+  $('resumeBtn').addEventListener('click', resumeGame);
+  $('pauseBtn').addEventListener('click', () => mode === 'paused' ? resumeGame() : pauseGame());
+
+  // ---------- particles ----------
+  function burst(x, y, n, color, spd) {
+    const count = reduced ? Math.ceil(n / 3) : n;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, s = spd * (0.3 + Math.random() * 0.7);
+      parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4 + Math.random() * 0.4, color, r: 2 + Math.random() * 3 });
+    }
+  }
+
+  // ---------- physics ----------
+  function bounce(nx, ny, e) {
+    const vn = fish.vx * nx + fish.vy * ny;
+    if (vn < 0) { fish.vx -= (1 + e) * vn * nx; fish.vy -= (1 + e) * vn * ny; fish.angle = Math.atan2(fish.vy, fish.vx); }
+  }
+  function collide() {
+    for (const b of boulders) {
+      const dx = fish.x - b.x, dy = fish.y - b.y, d = Math.hypot(dx, dy), min = b.r + FR;
+      if (d < min && d > 0.001) {
+        fish.x = b.x + dx / d * min; fish.y = b.y + dy / d * min;
+        bounce(dx / d, dy / d, 0.45);
+      }
+    }
+    if (fish.z < 14) {
+      for (const l of logs) {
+        const cx = Math.max(l.x, Math.min(fish.x, l.x + l.w)), cy = Math.max(l.y, Math.min(fish.y, l.y + l.h));
+        const dx = fish.x - cx, dy = fish.y - cy, d = Math.hypot(dx, dy);
+        if (d < FR) {
+          let nx, ny;
+          if (d > 0.001) { nx = dx / d; ny = dy / d; fish.x = cx + nx * FR; fish.y = cy + ny * FR; }
+          else { nx = fish.x < l.x + l.w / 2 ? -1 : 1; ny = 0; fish.x = nx < 0 ? l.x - FR : l.x + l.w + FR; }
+          bounce(nx, ny, 0.3);
+        }
+      }
+    }
+    if (fish.x > TREES - FR) { fish.x = TREES - FR; bounce(-1, 0, 0.4); }
+    if (fish.y < TOP) { fish.y = TOP; bounce(0, 1, 0.4); }
+    if (fish.y > BOTTOM) { fish.y = BOTTOM; bounce(0, -1, 0.4); }
+  }
+
+  // The eagle flies faster, locks on sooner, leads the trout's landing spot,
+  // keeps homing during the strike and hits a wider area every round after 3.
+  function eagleSkill() {
+    const k = Math.max(0, level - 3);
+    return {
+      speed: 260 + k * 45,
+      track: Math.max(0.8, 2 - k * 0.2),
+      lock: Math.max(0.3, 0.8 - k * 0.07),
+      radius: Math.min(62, 38 + k * 4),
+      lead: Math.min(1, 0.35 + k * 0.15),
+      home: Math.min(0.9, 0.2 + k * 0.1),
+      rest: Math.max(0.8, 3.5 - k * 0.35),
+      reachZ: Math.min(48, 22 + k * 4)
+    };
+  }
+  function eagleAim(sk) {
+    // Where the trout will be: its landing spot mid-flop, or the end of its slide.
+    let tLeft = 1 / 7;
+    if (fish.z > 0 || fish.vz > 0) tLeft = (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV;
+    return { x: fish.x + fish.vx * tLeft * sk.lead, y: fish.y + fish.vy * tLeft * sk.lead };
+  }
+  function moveEagle(to, spd, dt) {
+    const dx = to.x - eagle.x, dy = to.y - eagle.y, d = Math.hypot(dx, dy) || 1;
+    const step = Math.min(spd * dt, d);
+    eagle.x += dx / d * step; eagle.y += dy / d * step;
+    return d;
+  }
+  function updateEagle(dt) {
+    if (eagle.phase === 'off') return;
+    eagle.t -= dt;
+    const sk = eagleSkill();
+    if (eagle.phase === 'idle' && eagle.t <= 0) {
+      eagle.phase = 'track'; eagle.t = sk.track;
+      eagle.x = fish.x + rnd(-200, 200); eagle.y = fish.y < WH / 2 ? WH + 80 : -80;
+    } else if (eagle.phase === 'track') {
+      const d = moveEagle(eagleAim(sk), sk.speed, dt);
+      if (eagle.t <= 0 && d < 50) { eagle.phase = 'lock'; eagle.t = eagle.lockDur = sk.lock; tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!'); }
+    } else if (eagle.phase === 'lock') {
+      moveEagle(eagleAim(sk), sk.speed * sk.home, dt);
+      if (eagle.t <= 0) {
+        if (Math.hypot(fish.x - eagle.x, fish.y - eagle.y) < sk.radius && fish.z < sk.reachZ) { eagle.phase = 'carry'; lose('eagle'); return; }
+        eagle.phase = 'leave'; eagle.t = 1;
+        const a = rnd(0, Math.PI * 2); eagle.vx = Math.cos(a) * 600; eagle.vy = Math.sin(a) * 600;
+      }
+    } else if (eagle.phase === 'leave') {
+      eagle.x += eagle.vx * dt; eagle.y += eagle.vy * dt;
+      if (eagle.t <= 0) { eagle.phase = 'idle'; eagle.t = sk.rest + rnd(0, 1.5); }
+    }
+  }
+
+  function updateCanoe(dt) {
+    if (!canoe.active) {
+      canoe.t -= dt;
+      if (canoe.t <= 0) {
+        canoe.active = true; canoe.y = -90; canoe.off = rnd(-10, 10); canoe.vy = rnd(40, 55);
+        canoe.color = CANOE_COLORS[Math.floor(Math.random() * CANOE_COLORS.length)];
+      }
+      return;
+    }
+    canoe.y += canoe.vy * dt;
+    canoe.x = (farAt(canoe.y) + shoreAt(canoe.y)) / 2 + canoe.off;
+    if (canoe.y > WH + 100) { canoe.active = false; canoe.t = rnd(9, 15); }
+  }
+
+  function update(dt) {
+    clock += dt;
+    if (bannerTimer > 0) bannerTimer -= dt;
+    updateCanoe(dt);
+    cam += (camTarget() - cam) * Math.min(1, dt * 5);
+    if (popup) { popup.life -= dt; popup.y -= 30 * dt; if (popup.life <= 0) popup = null; }
+
+    if (mode === 'play') {
+      fish.cooldown -= dt;
+      fish.x += fish.vx * dt; fish.y += fish.vy * dt;
+      if (fish.z > 0 || fish.vz > 0) {
+        fish.vz -= GRAV * dt; fish.z += fish.vz * dt;
+        if (fish.z <= 0) {
+          fish.z = 0; fish.vz = 0;
+          burst(fish.x, fish.y, 6, '#b9cf8a', 110);
+          tone(120, 0.08, 'sine', 0.12);
+        }
+      } else {
+        const k = Math.max(0, 1 - 7 * dt);
+        fish.vx *= k; fish.vy *= k;
+        if (Math.hypot(fish.vx, fish.vy) < 4) fish.vx = fish.vy = 0;
+      }
+      collide();
+      runQueuedFlop(dt);
+
+      moisture -= drainRate() * dt;
+      for (const s of springs) {
+        if (fish.z === 0 && s.water > 0 && Math.hypot(fish.x - s.x, fish.y - s.y) < s.r + 4) {
+          const take = Math.min(s.water, 45 * dt, 100 - moisture);
+          s.water -= take; moisture += take;
+          if (!reduced && Math.random() < 0.3) burst(fish.x, fish.y, 1, '#d6f1ee', 80);
+        }
+      }
+      updateEagle(dt);
+      if (mode === 'play') {
+        if (inRiver()) reachRiver();
+        else if (moisture <= 0) lose('dry');
+      }
+      updateHud();
+    } else if (mode === 'saved') {
+      // Swim off downstream.
+      const target = (farAt(fish.y) + shoreAt(fish.y)) / 2;
+      fish.z = Math.max(0, fish.z - 300 * dt);
+      fish.x += (target - fish.x) * Math.min(1, dt * 2);
+      fish.y += 160 * dt;
+      fish.angle += (Math.PI / 2 - fish.angle) * Math.min(1, dt * 4);
+      fish.alpha = Math.max(0, stateTimer / 1.4);
+      stateTimer -= dt;
+      if (stateTimer <= 0) { level++; makeLevel(level); mode = 'play'; updateHud(); announce('Round ' + level + ', ' + place + '.'); }
+    } else if (mode === 'dying') {
+      if (deathBy === 'eagle') { fish.lift += dt * 1.5; eagle.y -= 260 * dt; fish.y -= 260 * dt; }
+      stateTimer -= dt;
+      if (stateTimer <= 0) showOver();
+    }
+
+    for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; }
+    parts = parts.filter(p => p.life > 0);
+    for (const r of ripples) { r.age += dt; r.y += 50 * dt; }
+    ripples = ripples.filter(r => r.age < 1.4);
+  }
+
+  // ---------- draw ----------
+  const hex = c => c.match(/\w\w/g).map(h => parseInt(h, 16));
+  function mix(c1, c2, k) {
+    const a = hex(c1), b = hex(c2);
+    return 'rgb(' + a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',') + ')';
+  }
+
+  function drawGround(sec) {
+    ctx.fillStyle = '#7c9c52'; ctx.fillRect(-2000, -2000, WW + 4000, WH + 4000);
+    // mown-grass stripes
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (let y = -200; y < WH + 200; y += 60) ctx.fillRect(-2000, y, WW + 4000, 30);
+    for (const l of leaves) {
+      ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
+      ctx.fillStyle = l.c; ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawRiver(sec) {
+    ctx.beginPath();
+    ctx.moveTo(farAt(-400), -400);
+    for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y), y);
+    for (let y = WH + 400; y >= -400; y -= 10) ctx.lineTo(shoreAt(y), y);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(river.far, 0, river.base + 30, 0);
+    g.addColorStop(0, '#1d555b'); g.addColorStop(0.5, '#25666b'); g.addColorStop(1, '#3a8a86');
+    ctx.fillStyle = g; ctx.fill();
+    // shallow riffle edge and gravel bar
+    ctx.save();
+    ctx.beginPath();
+    for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(shoreAt(y) - 6, y);
+    ctx.strokeStyle = 'rgba(160,210,200,0.55)'; ctx.lineWidth = 16; ctx.stroke();
+    ctx.restore();
+    for (const p of pebbles) {
+      ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(shoreAt(p.y) + p.dx, p.y, p.r, 0, 7); ctx.fill();
+    }
+    const t = reduced ? 0 : sec;
+    const laneX = (y, lane) => { const fx = farAt(y); return fx + (shoreAt(y) - fx) * lane; };
+    ctx.lineCap = 'round';
+
+    // Current: long, gently wavy flow lines that follow the banks and fade at both ends.
+    // Mid-channel water moves faster than the water near the banks.
+    for (let i = 0; i < 12; i++) {
+      const lane = (i + 0.5) / 12, mid = 1 - Math.abs(lane - 0.5) * 2;
+      const speed = 35 + mid * 55, len = 110 + (i * 37) % 80, period = WH + 400;
+      for (let rep = 0; rep < 2; rep++) {
+        const y0 = ((i * 211 + rep * period / 2 + t * speed) % period) - 200;
+        ctx.beginPath();
+        for (let s = 0; s <= 14; s++) {
+          const y = y0 + s / 14 * len;
+          const x = laneX(y, lane) + Math.sin(y * 0.04 + i * 1.3 + t * 0.8) * 4;
+          s ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        const g = ctx.createLinearGradient(0, y0, 0, y0 + len), a = 0.14 + mid * 0.12;
+        g.addColorStop(0, 'rgba(225,242,238,0)'); g.addColorStop(0.5, 'rgba(225,242,238,' + a + ')'); g.addColorStop(1, 'rgba(225,242,238,0)');
+        ctx.strokeStyle = g; ctx.lineWidth = 2.2; ctx.stroke();
+      }
+    }
+
+    // Surface glints: small crescents, curved upstream, that shimmer as they ride the current.
+    for (let i = 0; i < 28; i++) {
+      const lane = 0.08 + ((i * 0.618) % 1) * 0.84;
+      const y = ((i * 89 + t * (40 + (i % 4) * 12)) % (WH + 200)) - 100;
+      const shimmer = 0.5 + 0.5 * Math.sin(sec * 3 + i * 1.7);
+      ctx.strokeStyle = 'rgba(255,255,255,' + 0.4 * shimmer + ')'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(laneX(y, lane), y, 4 + (i % 3) * 2, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    }
+
+    // Foam line where the current runs along the near bank, sliding downstream.
+    ctx.save();
+    ctx.beginPath();
+    for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(shoreAt(y) - 13 + Math.sin(y * 0.09 + t * 2) * 2, y);
+    ctx.setLineDash([14, 10, 4, 12]); ctx.lineDashOffset = -t * 45;
+    ctx.strokeStyle = 'rgba(245,252,250,0.55)'; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.restore();
+
+    // Fallen leaves floating downstream, turning slowly.
+    for (let i = 0; i < 7; i++) {
+      const lane = 0.15 + ((i * 0.37) % 1) * 0.7;
+      const y = ((i * 173 + t * (38 + (i % 3) * 10)) % (WH + 240)) - 120;
+      ctx.save();
+      ctx.translate(laneX(y, lane) + Math.sin(t * 0.9 + i) * 6, y);
+      ctx.rotate(i + t * 0.6 * (i % 2 ? 1 : -1));
+      ctx.fillStyle = LEAF_COLORS[i % LEAF_COLORS.length];
+      ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Limestone bluff across the river: ledges step back from the water, cedars cling to the rim.
+  function drawBluff() {
+    const edge = off => { ctx.beginPath(); for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y) + off, y); };
+    ctx.beginPath(); ctx.moveTo(-2000, -400);
+    for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y), y);
+    ctx.lineTo(-2000, WH + 400); ctx.closePath();
+    ctx.fillStyle = '#b9b09b'; ctx.fill();
+    const bands = [['#d6cdb8', 10, -6], ['#a59b86', 4, -14], ['#cbc2ac', 9, -22], ['#9a907b', 3, -31], ['#c4bba5', 8, -40]];
+    for (const [c, w, off] of bands) { edge(off); ctx.strokeStyle = c; ctx.lineWidth = w; ctx.stroke(); }
+    edge(9); ctx.strokeStyle = 'rgba(10,30,30,0.22)'; ctx.lineWidth = 14; ctx.stroke();
+    for (const t of talus) { ctx.fillStyle = t.c; ctx.beginPath(); ctx.arc(farAt(t.y) + t.dx, t.y, t.r, 0, 7); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(90,80,65,0.45)'; ctx.lineWidth = 1.5;
+    for (let y = -380; y < WH + 400; y += 47) {
+      const x = farAt(y);
+      ctx.beginPath(); ctx.moveTo(x - 4, y); ctx.lineTo(x - 18, y + 6); ctx.lineTo(x - 30, y + 3); ctx.stroke();
+    }
+    for (const c of cedars) {
+      const x = farAt(c.y) + c.dx - 30;
+      ctx.fillStyle = 'rgba(30,40,20,0.3)'; ctx.beginPath(); ctx.arc(x + 5, c.y + 6, c.r, 0, 7); ctx.fill();
+      ctx.fillStyle = c.c; ctx.beginPath(); ctx.arc(x, c.y, c.r, 0, 7); ctx.fill();
+    }
+  }
+
+  // Fly angler in waders, seen from above: wide-brim hat, vest, rod and a chartreuse fly line.
+  function drawAngler(a, sec) {
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    if (!reduced) {
+      for (const k of [0, 0.5]) {
+        const r = (sec * 0.5 + k + a.seed) % 1;
+        ctx.strokeStyle = 'rgba(230,245,240,' + 0.5 * (1 - r) + ')'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(0, 0, 13 + r * 16, 0, 7); ctx.stroke();
+      }
+    }
+    ctx.rotate(a.facing);
+    const sw = reduced ? 0 : Math.sin(sec * 1.6 + a.seed);
+    const rodA = 0.35 * sw, tx = 8 + Math.cos(rodA) * 34, ty = 8 + Math.sin(rodA) * 34;
+    ctx.strokeStyle = '#e4dc5c'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(tx, ty);
+    ctx.quadraticCurveTo(tx + 26, ty - 22 * Math.cos(sec * 1.6 + a.seed), tx + 46 + 10 * sw, ty + 18 * Math.sin(sec * 0.8 + a.seed));
+    ctx.stroke();
+    ctx.strokeStyle = '#3a2a1a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(6, 8); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.fillStyle = 'rgba(15,40,40,0.25)'; ctx.beginPath(); ctx.ellipse(3, 3, 11, 16, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#55603f'; ctx.beginPath(); ctx.ellipse(0, 0, 10, 15, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#b59f6a'; ctx.beginPath(); ctx.ellipse(-1, 0, 7, 11, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#55603f'; ctx.beginPath(); ctx.ellipse(5, 9, 5, 3, 0.4, 0, 7); ctx.fill();
+    ctx.fillStyle = '#cdb985'; ctx.beginPath(); ctx.arc(1, 0, 9, 0, 7); ctx.fill();
+    ctx.fillStyle = '#a8925c'; ctx.beginPath(); ctx.arc(1, 0, 5, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  // Canoe drifting downstream with two paddlers in orange life jackets.
+  function drawCanoe(sec) {
+    const c = canoe;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(Math.PI / 2 + 0.08 * Math.sin(sec * 0.7));
+    if (!reduced) {
+      ctx.strokeStyle = 'rgba(230,245,240,0.45)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-36, -4); ctx.lineTo(-62, -16); ctx.moveTo(-36, 4); ctx.lineTo(-62, 16); ctx.stroke();
+    }
+    const hull = k => {
+      ctx.beginPath(); ctx.moveTo(38 * k, 0);
+      ctx.bezierCurveTo(20 * k, -12 * k, -20 * k, -12 * k, -38 * k, 0);
+      ctx.bezierCurveTo(-20 * k, 12 * k, 20 * k, 12 * k, 38 * k, 0);
+    };
+    ctx.fillStyle = 'rgba(10,30,30,0.25)'; ctx.save(); ctx.translate(4, 5); hull(1); ctx.fill(); ctx.restore();
+    hull(1); ctx.fillStyle = c.color; ctx.fill();
+    hull(0.8); ctx.fillStyle = '#d9c49a'; ctx.fill();
+    ctx.strokeStyle = '#a88a5c'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(4, -8); ctx.lineTo(4, 8); ctx.moveTo(-6, -8); ctx.lineTo(-6, 8); ctx.stroke();
+    const stroke = reduced ? 0 : Math.sin(sec * 2.4);
+    for (const [px, side] of [[18, 1], [-20, -1]]) {
+      const pa = side * stroke;
+      ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px - 6 + pa * 8, side * 18); ctx.stroke();
+      ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.ellipse(px - 6 + pa * 8, side * 20, 5, 2.5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#e0a32e'; ctx.beginPath(); ctx.arc(px, 0, 6.5, 0, 7); ctx.fill();
+      ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.arc(px + 1, 0, 3.8, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawSpring(s) {
+    const k = Math.max(0, s.water / 35);
+    ctx.fillStyle = '#a69c86';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 5, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(80,165,170,' + (0.3 + 0.6 * k) + ')';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r * (0.45 + 0.55 * k), 0, 7); ctx.fill();
+    if (k > 0 && !reduced) {
+      const ring = (clock * 0.8) % 1;
+      ctx.strokeStyle = 'rgba(255,255,255,' + 0.5 * (1 - ring) + ')'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r * k * ring, 0, 7); ctx.stroke();
+    }
+  }
+
+  function drawLog(l) {
+    ctx.fillStyle = 'rgba(30,40,20,0.25)'; ctx.fillRect(l.x + 5, l.y + 6, l.w, l.h);
+    ctx.fillStyle = '#7a5434'; ctx.fillRect(l.x, l.y, l.w, l.h);
+    ctx.strokeStyle = '#5c3d24'; ctx.lineWidth = 2;
+    for (let y = l.y + 12; y < l.y + l.h - 6; y += 16) { ctx.beginPath(); ctx.moveTo(l.x + 3, y); ctx.lineTo(l.x + l.w - 4, y + 5); ctx.stroke(); }
+    ctx.fillStyle = '#c99b66';
+    ctx.beginPath(); ctx.ellipse(l.x + l.w / 2, l.y, l.w / 2, 5, 0, 0, 7); ctx.fill();
+  }
+
+  function drawBoulder(b) {
+    ctx.fillStyle = 'rgba(30,40,20,0.3)'; ctx.beginPath(); ctx.arc(b.x + 5, b.y + 6, b.r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#cdc6b6'; ctx.beginPath();
+    for (let i = 0; i < 9; i++) {
+      const a = i / 9 * Math.PI * 2, rr = b.r * (0.86 + 0.14 * Math.sin(a * 3 + b.seed));
+      i ? ctx.lineTo(b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr) : ctx.moveTo(b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+    // limestone bedding lines
+    ctx.strokeStyle = 'rgba(120,110,95,0.5)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(b.x - b.r * 0.6, b.y - b.r * 0.1); ctx.lineTo(b.x + b.r * 0.5, b.y - b.r * 0.25);
+    ctx.moveTo(b.x - b.r * 0.4, b.y + b.r * 0.35); ctx.lineTo(b.x + b.r * 0.6, b.y + b.r * 0.2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.25, 0, 7); ctx.fill();
+  }
+
+  // ---------- forest ----------
+  // Northeast Iowa hardwoods in late October, plus a few evergreens. Each tree's leaf clumps
+  // mostly use its own species' colors; some trees are still turning and mix in a second set.
+  const SPECIES = [
+    { w: 3, pal: ['#c4372b', '#d8532f', '#e0743a', '#a8282a'] }, // red maple
+    { w: 3, pal: ['#e0782c', '#f0a03a', '#d55f22', '#e88a2e'] }, // sugar maple
+    { w: 2, pal: ['#8e4a28', '#a65a2e', '#7a3f22', '#b5713a'] }, // bur and red oak
+    { w: 2, pal: ['#e8c040', '#d9a92c', '#f2d460', '#c99a28'] }, // ash, hickory, basswood
+    { w: 2, pal: ['#5f7f3a', '#6e8c42', '#4f6d33', '#7b9446'] }, // not turned yet
+    { w: 1, pal: ['#2f4a33', '#3b5a3c', '#29402c'] }             // white pine, red cedar
+  ];
+  const SPECIES_TOTAL = SPECIES.reduce((s, sp) => s + sp.w, 0);
+  const pickOne = a => a[Math.floor(Math.random() * a.length)];
+  function pickSpecies() {
+    let r = Math.random() * SPECIES_TOTAL;
+    for (const sp of SPECIES) { r -= sp.w; if (r <= 0) return sp; }
+    return SPECIES[0];
+  }
+  function shadeHex(c1, c2, k) {
+    const a = hex(c1), b = hex(c2);
+    return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * k).toString(16).padStart(2, '0')).join('');
+  }
+  function makeTree(x, y, r, dim) {
+    const sp = pickSpecies(), sp2 = Math.random() < 0.3 ? pickSpecies() : sp;
+    const lobes = [{ dx: 0, dy: 0, r: r * 0.62, c: pickOne(sp.pal) }];
+    const n = 6 + Math.floor(r / 10);
+    for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2 + rnd(-0.3, 0.3), d = r * rnd(0.35, 0.6);
+      lobes.push({ dx: Math.cos(a) * d, dy: Math.sin(a) * d, r: r * rnd(0.32, 0.5), c: pickOne(Math.random() < 0.75 ? sp.pal : sp2.pal) });
+    }
+    return { x, y, r, dim, lobes };
+  }
+  function paintShadow(g, t) {
+    const off = t.r * 0.32;
+    g.fillStyle = 'rgba(20,30,15,0.28)';
+    g.beginPath();
+    for (const l of t.lobes) {
+      const cx = t.x + l.dx + off, cy = t.y + l.dy + off * 1.15;
+      g.moveTo(cx + l.r, cy); g.arc(cx, cy, l.r, 0, Math.PI * 2);
+    }
+    g.fill();
+  }
+  function paintTree(g, t) {
+    // Clumps in shade (lower right) first, sunlit ones (upper left) on top.
+    const lobes = [...t.lobes].sort((a, b) => (b.dx + b.dy) - (a.dx + a.dy));
+    for (const l of lobes) {
+      const cx = t.x + l.dx, cy = t.y + l.dy;
+      const base = t.dim ? shadeHex(l.c, '#1f2b22', t.dim) : l.c;
+      const grd = g.createRadialGradient(cx - l.r * 0.35, cy - l.r * 0.4, l.r * 0.1, cx, cy, l.r);
+      grd.addColorStop(0, shadeHex(base, '#ffffff', 0.22));
+      grd.addColorStop(0.55, base);
+      grd.addColorStop(1, shadeHex(base, '#000000', 0.35));
+      g.fillStyle = grd; g.beginPath(); g.arc(cx, cy, l.r, 0, Math.PI * 2); g.fill();
+    }
+    // Speckled leaf texture.
+    const n = Math.round(t.r * 0.8);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * t.r * 0.8;
+      g.fillStyle = Math.random() < 0.5 ? 'rgba(255,240,200,0.18)' : 'rgba(30,20,10,0.18)';
+      g.beginPath(); g.arc(t.x + Math.cos(a) * d, t.y + Math.sin(a) * d, rnd(1, 2.6), 0, Math.PI * 2); g.fill();
+    }
+  }
+  // The forest is drawn once per round into its own canvas, then copied each frame.
+  // It's only painted as deep into the woods as the camera can show: on a phone the view never
+  // goes past the bank's edge, so only the first two rows are built, which keeps the
+  // round-start cost low on slower devices. Wide screens get all four rows.
+  let treeLayer = null;
+  function treeReach() {
+    const right = view.w >= WW + 40 ? (WW + view.w) / 2 : WW;
+    return Math.min(620, Math.max(0, right - TREES) + 70);
+  }
+  function buildTrees() {
+    const reach = treeReach();
+    const x0 = TREES - 70, x1 = TREES + reach, y0 = -160, y1 = WH + 160, k = 1.5;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil((x1 - x0) * k); c.height = Math.ceil((y1 - y0) * k);
+    const g = c.getContext('2d');
+    g.scale(k, k); g.translate(-x0, -y0);
+    const floor = g.createLinearGradient(TREES - 20, 0, TREES + 90, 0);
+    floor.addColorStop(0, 'rgba(60,80,40,0)'); floor.addColorStop(1, 'rgba(60,80,40,0.6)');
+    g.fillStyle = floor; g.fillRect(TREES - 20, y0, x1 - TREES + 20, y1 - y0);
+    // Rows from deep in the woods out to the bank edge: farther rows are smaller and darker.
+    const rows = [
+      { from: 330, to: 620, rmin: 24, rmax: 40, dim: 0.38 },
+      { from: 190, to: 330, rmin: 28, rmax: 48, dim: 0.24 },
+      { from: 80, to: 190, rmin: 32, rmax: 56, dim: 0.11 },
+      { from: 0, to: 80, rmin: 22, rmax: 62, dim: 0 }
+    ];
+    for (const row of rows) {
+      if (row.from >= reach) continue;
+      const list = [];
+      for (let cx = row.from; cx < row.to; cx += 85) {
+        for (let y = y0 + rnd(0, 30); y < y1; ) {
+          const r = rnd(row.rmin, row.rmax);
+          const x = TREES + Math.max(r * 0.6, cx + rnd(0, Math.min(85, row.to - cx)));
+          list.push(makeTree(x, y + rnd(-10, 10), r, row.dim));
+          y += r * rnd(0.9, 1.4);
+        }
+      }
+      list.sort((a, b) => a.y - b.y);
+      for (const t of list) paintShadow(g, t);
+      for (const t of list) paintTree(g, t);
+    }
+    treeLayer = { canvas: c, x: x0, y: y0, w: x1 - x0, h: y1 - y0, reach };
+  }
+  function drawTrees() {
+    if (treeLayer) ctx.drawImage(treeLayer.canvas, treeLayer.x, treeLayer.y, treeLayer.w, treeLayer.h);
+  }
+
+  // Rainbow trout seen from above: olive spotted back, pink stripe, silver sides, forked tail.
+  const SPOTS = [[0.22, -0.3], [0.3, 0.25], [0.38, -0.1], [0.46, 0.35], [0.52, -0.35], [0.6, 0.1], [0.68, -0.2], [0.74, 0.3], [0.8, -0.05], [0.86, 0.2]];
+  function drawTrout(dry, dead) {
+    const L = 50;
+    const onGround = fish.z === 0 && mode === 'play';
+    const wig = reduced ? 0 : onGround ? Math.sin(clock * (11 + (100 - moisture) * 0.08)) * (0.5 + (100 - moisture) * 0.008) : fish.z > 0 ? 0.6 : Math.sin(clock * 6) * 0.4;
+    const bend = dead ? 0.8 : wig;
+    const spine = [], N = 10;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      spine.push({ x: L / 2 - t * L, y: bend * t * t * 12, w: 9.5 * Math.sin(Math.PI * Math.min(1, 0.14 + t * 0.92)) + 0.6 });
+    }
+    const body = (scale, color) => {
+      ctx.fillStyle = color; ctx.beginPath();
+      spine.forEach((p, i) => i ? ctx.lineTo(p.x, p.y - p.w * scale) : ctx.moveTo(p.x, p.y - p.w * scale));
+      for (let i = spine.length - 1; i >= 0; i--) ctx.lineTo(spine[i].x, spine[i].y + spine[i].w * scale);
+      ctx.closePath(); ctx.fill();
+    };
+    const tail = spine[N];
+    const silver = mix('dcdcd2', 'c8b89a', dry), pink = mix('e3798c', 'c2a183', dry), olive = mix('6b7a3a', '8f8467', dry);
+    ctx.fillStyle = olive;
+    ctx.beginPath();
+    ctx.moveTo(tail.x + 2, tail.y);
+    ctx.lineTo(tail.x - 13, tail.y - 10 + bend * 3); ctx.lineTo(tail.x - 8, tail.y + bend * 4); ctx.lineTo(tail.x - 13, tail.y + 10 + bend * 3);
+    ctx.closePath(); ctx.fill();
+    // pectoral fins
+    ctx.fillStyle = mix('e9b2a0', 'c8b89a', dry);
+    const pf = spine[3];
+    ctx.beginPath(); ctx.ellipse(pf.x - 2, pf.y - pf.w - 2, 6, 2.5, -0.6, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(pf.x - 2, pf.y + pf.w + 2, 6, 2.5, 0.6, 0, 7); ctx.fill();
+    body(1, silver);
+    body(0.78, pink);
+    body(0.48, olive);
+    ctx.fillStyle = 'rgba(20,25,15,0.85)';
+    for (const [t, off] of SPOTS) {
+      const i = Math.min(N, Math.round(t * N)), p = spine[i];
+      ctx.beginPath(); ctx.arc(L / 2 - t * L, p.y + off * p.w, 1.3, 0, 7); ctx.fill();
+    }
+    const head = spine[1];
+    for (const sgn of [-1, 1]) {
+      const ex = head.x - 1, ey = head.y + sgn * (head.w - 1);
+      ctx.fillStyle = '#f1efe6'; ctx.beginPath(); ctx.arc(ex, ey, 2.6, 0, 7); ctx.fill();
+      if (dead) {
+        ctx.strokeStyle = '#1f2b22'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(ex - 1.8, ey - 1.8); ctx.lineTo(ex + 1.8, ey + 1.8); ctx.moveTo(ex + 1.8, ey - 1.8); ctx.lineTo(ex - 1.8, ey + 1.8); ctx.stroke();
+      } else { ctx.fillStyle = '#1f2b22'; ctx.beginPath(); ctx.arc(ex + 0.4, ey, 1.4, 0, 7); ctx.fill(); }
+    }
+  }
+
+  function drawFish() {
+    const dry = 1 - Math.max(0, moisture) / 100;
+    const dead = mode === 'dying' || mode === 'over';
+    const z = fish.z + fish.lift * 120;
+    ctx.save();
+    ctx.globalAlpha = fish.alpha;
+    // shadow on the ground
+    ctx.fillStyle = 'rgba(25,35,15,' + (0.3 - Math.min(0.2, z / 300)) + ')';
+    // Clamp: once the eagle lifts the trout high, these radii would go negative, which canvas rejects.
+    ctx.beginPath(); ctx.ellipse(fish.x + 3, fish.y + 4, Math.max(2, 24 - z / 10), Math.max(1, 10 - z / 25), fish.angle, 0, 7); ctx.fill();
+    ctx.translate(fish.x, fish.y - z * 0.45);
+    const sc = 1 + z / 160;
+    ctx.scale(sc, sc);
+    ctx.rotate(fish.angle);
+    drawTrout(dry, dead);
+    ctx.restore();
+    if (mode === 'play' && moisture < 40 && !reduced) {
+      const k = (clock * 1.5) % 1;
+      ctx.fillStyle = 'rgba(150,215,225,' + (1 - k) + ')';
+      ctx.beginPath(); ctx.arc(fish.x + 14, fish.y - 18 + k * 12, 3, 0, 7); ctx.fill();
+    }
+  }
+
+  function drawEagle() {
+    if (eagle.phase === 'off' || eagle.phase === 'idle') return;
+    const locking = eagle.phase === 'lock';
+    const k = locking ? Math.min(1, 1 - eagle.t / (eagle.lockDur || 0.75)) : 0;
+    // Size the silhouette (wingtips at ±60 when unscaled) so the wingtips land exactly on the
+    // strike ring at the moment it hits: whatever the wings cover then is what gets caught.
+    const fit = eagleSkill().radius / 60;
+    const sc = fit * (eagle.phase === 'carry' ? 1.1 : 1.5 - k * 0.5);
+    ctx.save();
+    ctx.translate(eagle.x, eagle.y);
+    if (locking) {
+      ctx.strokeStyle = 'rgba(200,65,47,' + (0.4 + 0.5 * k) + ')'; ctx.lineWidth = 3;
+      ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.arc(0, 0, eagleSkill().radius, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.scale(sc, sc);
+    ctx.fillStyle = 'rgba(15,22,12,' + (0.28 + k * 0.25) + ')';
+    // wingspan silhouette, head toward the top
+    ctx.beginPath();
+    ctx.moveTo(0, -22);
+    ctx.quadraticCurveTo(14, -6, 54, -4); ctx.lineTo(60, 4); ctx.lineTo(48, 2); ctx.lineTo(52, 9); ctx.lineTo(38, 5);
+    ctx.quadraticCurveTo(14, 8, 9, 14); ctx.lineTo(13, 28); ctx.lineTo(0, 24); ctx.lineTo(-13, 28); ctx.lineTo(-9, 14);
+    ctx.quadraticCurveTo(-14, 8, -38, 5); ctx.lineTo(-52, 9); ctx.lineTo(-48, 2); ctx.lineTo(-60, 4); ctx.lineTo(-54, -4);
+    ctx.quadraticCurveTo(-14, -6, 0, -22);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawAim() {
+    if (!ptr || !canFlop()) return;
+    const dx = (ptr.x - ptr.x0) * (flip ? -1 : 1), dy = ptr.y - ptr.y0, dist = Math.hypot(dx, dy);
+    if (dist < 14) return;
+    const mag = swipeMag(dist), air = 2 * 360 / GRAV, reach = mag * air;
+    const ux = dx / dist, uy = dy / dist;
+    ctx.fillStyle = 'rgba(250,249,243,0.85)';
+    for (let i = 1; i <= 10; i++) {
+      const d = reach * i / 10;
+      ctx.beginPath(); ctx.arc(fish.x + ux * d, fish.y + uy * d, 3.2, 0, 7); ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(250,249,243,0.9)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(fish.x + ux * reach, fish.y + uy * reach, 10, 0, 7); ctx.stroke();
+  }
+
+  function screenText(text, x, y, size) {
+    ctx.font = '700 ' + size + 'px Fredoka, "Arial Rounded MT Bold", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = Math.max(3, size / 7); ctx.strokeStyle = '#1f2b22'; ctx.fillStyle = '#faf9f3';
+    ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
+  }
+
+  function draw(now) {
+    const sec = now / 1000;
+    ctx.fillStyle = '#7c9c52'; ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(0, view.oy); ctx.scale(view.s, view.s);
+    if (flip) { ctx.translate(cam + view.w, 0); ctx.scale(-1, 1); } else ctx.translate(-cam, 0);
+    drawGround(sec);
+    drawRiver(sec);
+    drawBluff();
+    for (const a of anglers) drawAngler(a, sec);
+    if (canoe.active) drawCanoe(sec);
+    // Splash rings spreading out and drifting with the current.
+    for (const r of ripples) {
+      for (const lag of [0, 0.22, 0.44]) {
+        const a = r.age - lag;
+        if (a <= 0) continue;
+        ctx.strokeStyle = 'rgba(235,248,245,' + Math.max(0, 0.7 * (1 - a / 1)) + ')'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.ellipse(r.x, r.y, 8 + a * 70, 6 + a * 52, 0, 0, 7); ctx.stroke();
+      }
+    }
+    for (const s of springs) drawSpring(s);
+    for (const l of logs) drawLog(l);
+    for (const b of boulders) drawBoulder(b);
+    if (mode !== 'title') drawFish();
+    drawTrees();
+    for (const p of parts) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2.5));
+      ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    drawAim();
+    drawEagle();
+    ctx.restore();
+
+    // Text stays unmirrored, in screen space.
+    const fs = Math.max(0.7, view.s);
+    // While the river is off screen, a tag on that edge points to it with the distance in feet.
+    if (mode === 'play' && shoreAt(fish.y) < cam) {
+      const feet = Math.max(1, Math.round((fish.x - shoreAt(fish.y)) / 43));
+      const label = flip ? 'River ' + feet + ' ft ▶' : '◀ River ' + feet + ' ft';
+      ctx.font = '800 ' + Math.round(15 * fs) + 'px Nunito, system-ui, sans-serif';
+      const tw = ctx.measureText(label).width + 22, th = 30 * fs;
+      const tx = flip ? W - 12 - tw : 12;
+      const ty = Math.max(70, Math.min(H - th - 12, view.oy + fish.y * view.s - th / 2));
+      ctx.fillStyle = 'rgba(44,111,116,0.92)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(tx, ty, tw, th, th / 2); else ctx.rect(tx, ty, tw, th);
+      ctx.fill();
+      ctx.fillStyle = '#faf9f3'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, tx + tw / 2, ty + th / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+    if (popup) {
+      const p = toScreen(popup.x, popup.y);
+      ctx.globalAlpha = Math.min(1, popup.life);
+      screenText(popup.text, p.x, p.y, 40 * fs);
+      ctx.globalAlpha = 1;
+    }
+    if (mode === 'play' && bannerTimer > 0) {
+      ctx.globalAlpha = Math.min(1, bannerTimer);
+      screenText('Round ' + level, W / 2, view.oy + 240 * view.s, 44 * fs);
+      screenText(place, W / 2, view.oy + 240 * view.s + 34 * fs, 22 * fs);
+      ctx.globalAlpha = 1;
+    }
+    if (mode === 'play' && hintOn && level === 1) {
+      const p = toScreen((shoreAt(fish.y) + fish.x) / 2, fish.y - 70);
+      screenText('← Swipe toward the river', p.x, p.y, 22 * fs);
+    }
+  }
+
+  // ---------- loop ----------
+  let last = performance.now();
+  function frame(now) {
+    // Schedule the next frame first, so one bad frame can't freeze the game.
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    if (mode !== 'paused') update(dt);
+    draw(now);
+  }
+  function boot(data) {
+    if (data && typeof data.best === 'number') best = Math.max(best, data.best);
+    resize();
+    makeLevel(1);
+    addEventListener('resize', resize);
+    requestAnimationFrame(frame);
+    try { $('startBtn').focus({ preventScroll: true }); } catch (e) {}
+  }
+  window.claude?.hot?.snapshot?.(() => ({ best }));
+  window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});
+})();
+</script>

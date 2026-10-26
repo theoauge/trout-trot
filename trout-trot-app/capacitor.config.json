@@ -1,0 +1,23 @@
+{
+  "appId": "com.thomas.trouttrot",
+  "appName": "Trout Trot",
+  "webDir": "www",
+  "backgroundColor": "#7c9c52",
+  "ios": {
+    "contentInset": "never"
+  },
+  "android": {
+    "backgroundColor": "#7c9c52"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "backgroundColor": "#7c9c52",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "LIGHT"
+    }
+  }
+}

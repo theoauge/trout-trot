@@ -1,0 +1,12 @@
+# Store text with LF line endings so the Mac build machines (Codemagic) read files as written.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files are never converted.
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.jar binary

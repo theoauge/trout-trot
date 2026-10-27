@@ -105,6 +105,12 @@ button { touch-action: manipulation; }
   box-shadow: 0 5px 0 #b45468;
 }
 .play:active { transform: translateY(3px); box-shadow: 0 2px 0 #b45468; }
+.text-btn {
+  border: 0; background: none; padding: 8px 12px; cursor: pointer;
+  font: 700 15px var(--body); color: var(--muted); text-decoration: underline; text-underline-offset: 3px;
+}
+.text-btn.armed { color: var(--danger); }
+.text-btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; border-radius: 8px; }
 </style>
 
 <canvas id="game" role="img" aria-label="Trout Trot game area: a trout on the bank of a river"></canvas>
@@ -130,6 +136,7 @@ button { touch-action: manipulation; }
       <div class="control"><b>Tap</b><span>beside the trout for a short hop.</span></div>
     </div>
     <button class="play" id="startBtn">Flop!</button>
+    <button class="text-btn" id="restartBtn" hidden>Start over</button>
   </div>
 </div>
 
@@ -177,7 +184,14 @@ button { touch-action: manipulation; }
   let level = 1, moisture = 100, stateTimer = 0, bannerTimer = 0, seasonTimer = 0, hintOn = true, clock = 0, deathBy = 'dry';
   // Rounds keep getting harder up to MAX_ROUND, then stay at that difficulty.
   const MAX_ROUND = 100;
-  const SEASON_TIME = 2.4; // seconds the "Autumn" title shows before the round banner
+  const SEASON_TIME = 2.4; // seconds a season's title ("Autumn", "Winter") shows before the round banner
+
+  // Seasons. Rounds 1–99 are autumn, with the trees turning as the rounds go on. Rounds 100 on are
+  // winter: dead grass, bare trees and a frozen river, with snow building up until round 199.
+  // `fall` and `snow` run from 0 to 1 across their season; makeLevel sets all four per round.
+  const WINTER_FROM = 100, WINTER_FULL = 199;
+  const clamp01 = v => Math.max(0, Math.min(1, v));
+  let winter = false, fall = 0, snow = 0, seasonName = '';
 
   // Progress: the round the player is on is saved on the device each time they clear a round,
   // and play always starts from it. There is no score.
@@ -195,9 +209,9 @@ button { touch-action: manipulation; }
   const fish = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, angle: Math.PI, cooldown: 0, alpha: 1, lift: 0 };
   let flip = false, river = { base: 185, amp: 0, phase: 0, far: 60 };
   let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [];
-  let anglers = [], talus = [], cedars = [], ripples = [], place = '';
+  let anglers = [], talus = [], cedars = [], ripples = [], drifts = [], holes = [], cracks = [], flakes = [], place = '';
   const canoe = { active: false, t: 4, x: 0, y: 0, vy: 0, off: 0, color: '#2f6b4f' };
-  const eagle = { phase: 'off', t: 0, x: 0, y: 0, vx: 0, vy: 0 };
+  let eagles = [], eagleCatcher = null;
 
   const rnd = (a, b) => a + Math.random() * (b - a);
   // Fisher–Yates: every order equally likely.
@@ -212,13 +226,25 @@ button { touch-action: manipulation; }
   const farAt = y => river.far + 8 * Math.sin(y * 0.017 + river.phase * 1.7);
   const PLACES = ['Trout Run', "Dunning's Spring", 'Twin Springs', 'Phelps Park', 'Palisades Park', 'Ice Cave', 'Malanaphy Springs', 'Siewers Spring', 'Will Baker Park', 'Pulpit Rock'];
   const CANOE_COLORS = ['#2f6b4f', '#b4402f', '#2f5a8a'];
-  const inRiver = () => fish.x < shoreAt(fish.y) - 4 && fish.z < 6;
-  const drainRate = () => Math.min(11, 7 + level * 0.4);
+  // Reaching the water. In autumn: anywhere past the near bank. In winter the river is frozen,
+  // so only an ice-fishing hole will do; the trout slides across the ice to reach one.
+  const holeAt = (x, y) => holes.find(h => Math.hypot(x - h.x, y - h.y) < h.r);
+  const inRiver = () => fish.z < 6 && (winter ? !!holeAt(fish.x, fish.y) : fish.x < shoreAt(fish.y) - 4);
+  const onIce = () => winter && fish.x < shoreAt(fish.y);
+  let savedHole = null; // the hole the trout went into, for the end-of-round animation
+  // Winter snow makes flopping harder: 4% less distance every 10 rounds from round 100
+  // (96% in rounds 100–109 … 60% in 190–199 and after). Cold air dries the trout more slowly by
+  // the same factor, so a crossing still costs about the same share of its moisture.
+  const flopScale = () => !winter ? 1 : 1 - 0.04 * (Math.floor((Math.min(level, WINTER_FULL) - WINTER_FROM) / 10) + 1);
+  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale();
   const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
 
   // ---------- level ----------
   function makeLevel(n) {
     flip = n > 1 && Math.random() < 0.5;
+    winter = n >= WINTER_FROM;
+    fall = clamp01((n - 1) / (WINTER_FROM - 2));
+    snow = winter ? clamp01((n - WINTER_FROM) / (WINTER_FULL - WINTER_FROM)) : 0;
     // Each round the trout lands 40 units (about 1 ft) farther from the river, up to MAX_ROUND.
     WW = 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52;
     river = { base: rnd(178, 192), amp: Math.min(n * 8, 45), phase: rnd(0, 6), far: 60 };
@@ -263,7 +289,7 @@ button { touch-action: manipulation; }
     // More springs on wider banks, since the trip takes longer.
     const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
     for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
-      const r = 52, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
+      const r = 78, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
       if (clearOf(x, y, r)) { springs.push({ x, y, r, water: 35 }); i++; }
     }
     // Invisibility bubble, somewhere between the trout and the river, and always out of every
@@ -278,9 +304,17 @@ button { touch-action: manipulation; }
       }
     }
 
-    leaves = Array.from({ length: Math.round(70 * WW / 600) }, () => {
+    // Fallen leaves: a few at the start of autumn, building up through the season; in winter,
+    // faded brown ones that disappear under the snow.
+    const leafShare = winter ? 1 - snow : 0.15 + 0.85 * fall;
+    leaves = Array.from({ length: Math.round(70 * WW / 600 * leafShare) }, () => {
       const y = rnd(-100, WH + 100);
-      return { x: rnd(shoreAt(y) + 14, WW + 300), y, a: rnd(0, 6), c: LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)] };
+      return { x: rnd(shoreAt(y) + 14, WW + 300), y, a: rnd(0, 6), c: winter ? pickOne(['#7a6448', '#6a553c', '#8a7255']) : pickOne(LEAF_COLORS) };
+    });
+    // Winter snow patches on the ground, growing as the snow builds.
+    drifts = !winter ? [] : Array.from({ length: Math.round(WW / 600 * 26) }, () => {
+      const y = rnd(-100, WH + 100);
+      return { x: rnd(shoreAt(y) + 10, WW + 300), y, rx: rnd(24, 60) * (0.4 + 1.6 * snow), ry: rnd(14, 34) * (0.4 + 1.6 * snow), a: rnd(0, 3) };
     });
     pebbles = Array.from({ length: 140 }, () => {
       const y = rnd(-200, WH + 200);
@@ -288,9 +322,24 @@ button { touch-action: manipulation; }
     });
     buildTrees();
 
-    // Fly anglers wading the shallows, spaced well apart.
+    // Winter: ice-fishing holes spread along the frozen river, each with an ice fisher beside it,
+    // plus cracks in the ice (stored as a fraction of the way across, so they follow the banks).
+    holes = []; cracks = [];
+    if (winter) {
+      const nh = 4;
+      for (let i = 0; i < nh; i++) {
+        const y = TOP + 50 + (BOTTOM - TOP - 100) * (i + rnd(0.2, 0.8)) / nh, fx = farAt(y);
+        holes.push({ x: fx + (shoreAt(y) - fx) * rnd(0.42, 0.62), y, r: 20, seed: rnd(0, 6), coat: pickOne(['#b4402f', '#2f5a8a', '#3e5a3b', '#d08a2e']) });
+      }
+      cracks = Array.from({ length: 16 }, () => {
+        let lane = rnd(0.05, 0.95), y = rnd(-100, WH + 100);
+        return Array.from({ length: 5 }, () => { const p = [lane, y]; lane = clamp01(lane + rnd(-0.15, 0.15)); y += rnd(12, 30); return p; });
+      });
+    }
+
+    // Fly anglers wading the shallows, spaced well apart. Not in winter, when the river is frozen.
     anglers = [];
-    const na = n === 1 ? 1 : Math.random() < 0.6 ? 2 : 1;
+    const na = winter ? 0 : n === 1 ? 1 : Math.random() < 0.6 ? 2 : 1;
     for (let i = 0, tries = 0; i < na && tries < 100; tries++) {
       const y = rnd(TOP + 40, BOTTOM - 40);
       if (anglers.every(a => Math.abs(a.y - y) > 220)) {
@@ -304,13 +353,15 @@ button { touch-action: manipulation; }
     });
     cedars = Array.from({ length: 26 }, (_, i) => ({
       y: -120 + i * 42 + rnd(-12, 12), dx: rnd(-34, -12), r: rnd(9, 15),
-      c: Math.random() < 0.6 ? '#3e5a3b' : LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)]
+      // Mostly red cedar; the rest are hardwoods that turn with the season, bare in winter.
+      c: Math.random() < 0.6 ? '#3e5a3b' : winter ? '#6b5a49' : shadeHex(pickOne(SUMMER), pickOne(LEAF_COLORS), clamp01(fall * 1.2 + rnd(-0.2, 0.2)))
     }));
 
-    eagle.phase = n >= EAGLE_FROM ? 'idle' : 'off';
-    eagle.t = rnd(2.5, 4);
+    eagles = Array.from({ length: eagleCount(n) }, (_, i) => ({ phase: 'idle', t: rnd(2.5, 4) + i * 2, x: 0, y: 0, vx: 0, vy: 0 }));
+    eagleCatcher = null;
     moisture = 100; bannerTimer = 1.6;
-    seasonTimer = n === 1 ? SEASON_TIME : 0; // the very first round opens with "Autumn"
+    seasonName = n === 1 ? 'Autumn' : n === WINTER_FROM ? 'Winter' : ''; // each season's first round opens with its name
+    seasonTimer = seasonName ? SEASON_TIME : 0;
     cam = camTarget();
     ui.round.textContent = n;
   }
@@ -388,7 +439,7 @@ button { touch-action: manipulation; }
     mode = 'play';
     ui.start.hidden = ui.over.hidden = ui.pause.hidden = true; ui.hud.hidden = false;
     updateHud();
-    announce((level === 1 ? 'Autumn. ' : '') + 'Round ' + level + ', ' + place + '.' + (level === 1 ? ' Swipe toward the river.' : ''));
+    announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + place + '.' + (level === 1 ? ' Swipe toward the river.' : ''));
   }
   // Pause works mid-round and during the splash and dying animations; resume returns to that state.
   let pausedFrom = 'play';
@@ -400,8 +451,9 @@ button { touch-action: manipulation; }
   function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
   function reachRiver() {
     mode = 'saved'; stateTimer = 1.4;
+    savedHole = winter ? holeAt(fish.x, fish.y) : null;
     saveRound(level + 1);
-    eagle.phase = 'off';
+    for (const e of eagles) e.phase = 'off';
     burst(fish.x, fish.y, 30, '#d6f1ee', 260);
     ripples.push({ x: fish.x, y: fish.y, age: 0 });
     splashSound();
@@ -410,6 +462,8 @@ button { touch-action: manipulation; }
   }
   function lose(reason) {
     mode = 'dying'; stateTimer = 1.4; deathBy = reason;
+    // Every other eagle stands down, so no shadow or ring is left frozen mid-dive.
+    for (const e of eagles) if (e !== eagleCatcher) e.phase = 'off';
     if (reason === 'dry') { moisture = 0; tone(300, 0.6, 'triangle', 0.12, 0.4); }
     else tone(880, 0.5, 'sawtooth', 0.06, 0.5);
     try { navigator.vibrate && navigator.vibrate(120); } catch (e) {}
@@ -456,6 +510,7 @@ button { touch-action: manipulation; }
     if (canFlop()) { const q = queuedFlop; queuedFlop = null; launch(q.dx, q.dy, q.mag); }
   }
   function launch(dx, dy, mag) {
+    mag *= flopScale();
     const d = Math.hypot(dx, dy) || 1;
     fish.vx = dx / d * mag; fish.vy = dy / d * mag; fish.vz = 360; fish.z = 0.01;
     fish.angle = Math.atan2(fish.vy, fish.vx);
@@ -501,6 +556,27 @@ button { touch-action: manipulation; }
   addEventListener('pagehide', pauseGame);
   document.addEventListener('freeze', pauseGame);
   $('startBtn').addEventListener('click', startGame);
+  // Start over: the first tap arms it, a second tap within 4 seconds resets progress to round 1.
+  const restartBtn = $('restartBtn');
+  let restartArmed = null;
+  function disarmRestart() {
+    clearTimeout(restartArmed); restartArmed = null;
+    restartBtn.textContent = 'Start over'; restartBtn.classList.remove('armed');
+  }
+  restartBtn.addEventListener('click', () => {
+    if (!restartArmed) {
+      restartBtn.textContent = 'Tap again to start over at round 1';
+      restartBtn.classList.add('armed');
+      restartArmed = setTimeout(disarmRestart, 4000);
+      return;
+    }
+    disarmRestart();
+    saveRound(1);
+    level = 1; makeLevel(1); layoutReady = true;
+    restartBtn.hidden = true;
+    $('startBtn').focus();
+    announce('Progress reset. Starting from round 1.');
+  });
   $('againBtn').addEventListener('click', startGame);
   $('resumeBtn').addEventListener('click', resumeGame);
   $('pauseBtn').addEventListener('click', () => mode === 'paused' ? resumeGame() : pauseGame());
@@ -540,107 +616,140 @@ button { touch-action: manipulation; }
       }
     }
     if (fish.x > TREES - FR) { fish.x = TREES - FR; bounce(-1, 0, 0.4); }
+    // In winter the trout can cross the ice, and bounces off the bluff on the far side.
+    if (winter && fish.x < farAt(fish.y) + FR) { fish.x = farAt(fish.y) + FR; bounce(1, 0, 0.4); }
     if (fish.y < TOP) { fish.y = TOP; bounce(0, 1, 0.4); }
     if (fish.y > BOTTOM) { fish.y = BOTTOM; bounce(0, -1, 0.4); }
   }
 
-  // The eagle arrives in round 5: fast, quick to lock on, leading the trout's landing spot and
-  // homing during the strike. EAGLE_SKILL = 6 is what the old ramping eagle reached by round 9;
-  // lower it to make the eagle easier.
+  // The eagle arrives in round 5. It flies in fast, circles the trout, then dives (EAGLE_DIVE).
+  // EAGLE_SKILL = 6 sets its flying speed, strike size and rest between dives; lower it to make
+  // the eagle easier.
   const EAGLE_FROM = 5, EAGLE_SKILL = 6;
-  // From round 10 it flies, circles and dives 5% faster every 10 rounds, compounding, up to
-  // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. Its warning time
-  // and strike size don't change.
+  // One eagle from round 5. In winter, eagles gather: one more every 25 rounds
+  // (2 from round 125, 3 from 150, 4 from 175 on). They hunt independently, staggered at the start.
+  const eagleCount = n => n < EAGLE_FROM ? 0 : n < WINTER_FROM ? 1
+    : 1 + Math.floor((Math.min(n, WINTER_FULL) - WINTER_FROM) / 25);
+  // From round 10 it flies in and circles 5% faster every 10 rounds, compounding, up to
+  // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. The dive itself
+  // doesn't speed up (see EAGLE_DIVE), nor does the strike size.
   const eagleSpeedUp = () => Math.pow(1.05, Math.max(0, Math.floor((Math.min(level, MAX_ROUND) - 10) / 10) + 1));
   const EAGLE = (k => ({
     speed: 260 + k * 45,
-    lock: Math.max(0.3, 0.8 - k * 0.07),
     radius: Math.min(62, 38 + k * 4),
-    lead: Math.min(1, 0.35 + k * 0.15),
-    home: Math.min(0.9, 0.2 + k * 0.1),
     rest: Math.max(0.8, 3.5 - k * 0.35),
     reachZ: Math.min(48, 22 + k * 4)
   }))(EAGLE_SKILL);
+  // The hunt, built so a well-timed flop can always escape a dive. The eagle circles for `circle`
+  // seconds, then the red ring appears `lead` of the way toward where the trout is heading; for the
+  // next `warn` seconds it drifts after the trout at no more than `steer` units/s, then strikes
+  // anything within `radius`. It rests `rest[0]` + up to `rest[1]` seconds before the next hunt.
+  // Winter eagles are hungrier: a shorter warning, a faster and further-ahead ring, a wider strike,
+  // and less circling and rest. Snow also weakens flops in winter (flopScale, down to ×0.6), so the
+  // warning lengthens and the drift slows by that factor, leaving time to land and flop clear.
+  const EAGLE_DIVE = {
+    autumn: { circle: 2, warn: 0.6, steer: 80, lead: 0.25, radius: EAGLE.radius, rest: [EAGLE.rest, 1.5] },
+    winter: { circle: 1.2, warn: 0.45, steer: 130, lead: 0.5, radius: 72, rest: [0.8, 1] }
+  };
+  const dive = () => (winter ? EAGLE_DIVE.winter : EAGLE_DIVE.autumn);
+  const diveWarn = () => dive().warn / flopScale();
+  const diveSteer = () => dive().steer * flopScale();
 
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
   const visibleTrout = () => (invisible > 0 ? null : fish);
 
-  // Before diving, the eagle circles the trout about once, spiralling in from 150 to 55 units.
-  const EAGLE_CIRCLE = { from: 150, to: 55, time: 2, spin: 3.2 };
-  function eagleAim(sk) {
-    // Where the trout will be: its landing spot mid-flop, or the end of its slide.
+  // Before diving, the eagle circles the trout (for dive().circle seconds), spiralling in from 150 to 55 units.
+  const EAGLE_CIRCLE = { from: 150, to: 55, spin: 3.2 };
+  function eagleAim(lead) {
+    // `lead` of the way from the trout to where it's heading: its landing spot mid-flop, or the
+    // end of its slide.
     let tLeft = 1 / 7;
     if (fish.z > 0 || fish.vz > 0) tLeft = (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV;
-    return { x: fish.x + fish.vx * tLeft * sk.lead, y: fish.y + fish.vy * tLeft * sk.lead };
+    return { x: fish.x + fish.vx * tLeft * lead, y: fish.y + fish.vy * tLeft * lead };
   }
-  function moveEagle(to, spd, dt) {
-    const dx = to.x - eagle.x, dy = to.y - eagle.y, d = Math.hypot(dx, dy) || 1;
+  function moveEagle(e, to, spd, dt) {
+    const dx = to.x - e.x, dy = to.y - e.y, d = Math.hypot(dx, dy) || 1;
     const step = Math.min(spd * dt, d);
-    eagle.x += dx / d * step; eagle.y += dy / d * step;
+    e.x += dx / d * step; e.y += dy / d * step;
     return d;
   }
-  function eagleLeave() {
-    eagle.phase = 'leave'; eagle.t = 1;
-    const a = rnd(0, Math.PI * 2); eagle.vx = Math.cos(a) * 600; eagle.vy = Math.sin(a) * 600;
+  function eagleLeave(e) {
+    e.phase = 'leave'; e.t = 1;
+    const a = rnd(0, Math.PI * 2); e.vx = Math.cos(a) * 600; e.vy = Math.sin(a) * 600;
   }
-  function updateEagle(dt) {
-    if (eagle.phase === 'off') return;
-    eagle.t -= dt;
+  function updateEagle(e, dt) {
+    if (e.phase === 'off' || mode !== 'play') return;
+    e.t -= dt;
     const sk = EAGLE, fast = eagleSpeedUp();
     // When the eagle can't see the trout it flies off, and doesn't return until it can.
     if (!visibleTrout()) {
-      if (eagle.phase === 'track' || eagle.phase === 'circle' || eagle.phase === 'lock') eagleLeave();
-      if (eagle.phase === 'idle' && eagle.t <= 0) eagle.t = 0.5;
+      if (e.phase === 'track' || e.phase === 'circle' || e.phase === 'lock') eagleLeave(e);
+      if (e.phase === 'idle' && e.t <= 0) e.t = 0.5;
     }
-    const px = eagle.x, py = eagle.y;
-    if (eagle.phase === 'idle' && eagle.t <= 0) {
-      eagle.phase = 'track';
-      eagle.x = fish.x + rnd(-200, 200); eagle.y = fish.y < WH / 2 ? WH + 80 : -80;
-    } else if (eagle.phase === 'track') {
+    const px = e.x, py = e.y;
+    if (e.phase === 'idle' && e.t <= 0) {
+      e.phase = 'track';
+      e.x = fish.x + rnd(-200, 200); e.y = fish.y < WH / 2 ? WH + 80 : -80;
+    } else if (e.phase === 'track') {
       // Close in only as far as the circling distance, then start circling from there, so the
       // shadow never passes over the trout before the dive.
-      const dx = fish.x - eagle.x, dy = fish.y - eagle.y, d = Math.hypot(dx, dy) || 1;
+      const dx = fish.x - e.x, dy = fish.y - e.y, d = Math.hypot(dx, dy) || 1;
       const step = Math.min(sk.speed * fast * dt, Math.max(0, d - EAGLE_CIRCLE.from));
-      eagle.x += dx / d * step; eagle.y += dy / d * step;
+      e.x += dx / d * step; e.y += dy / d * step;
       if (d - step <= EAGLE_CIRCLE.from + 1) {
-        eagle.phase = 'circle'; eagle.t = EAGLE_CIRCLE.time;
-        eagle.ang = Math.atan2(eagle.y - fish.y, eagle.x - fish.x);
-        eagle.dir = Math.random() < 0.5 ? -1 : 1;
+        e.phase = 'circle'; e.t = e.circleDur = dive().circle;
+        e.ang = Math.atan2(e.y - fish.y, e.x - fish.x);
+        e.dir = Math.random() < 0.5 ? -1 : 1;
       }
-    } else if (eagle.phase === 'circle') {
+    } else if (e.phase === 'circle') {
       // Circle the trout, spiralling in from EAGLE_CIRCLE.from to .to, then dive.
-      const k = 1 - Math.max(0, eagle.t) / EAGLE_CIRCLE.time;
+      const k = 1 - Math.max(0, e.t) / e.circleDur;
       const r = EAGLE_CIRCLE.from + (EAGLE_CIRCLE.to - EAGLE_CIRCLE.from) * k;
-      eagle.ang += eagle.dir * EAGLE_CIRCLE.spin * fast * dt;
-      const tx = fish.x + Math.cos(eagle.ang) * r, ty = fish.y + Math.sin(eagle.ang) * r;
-      eagle.x += (tx - eagle.x) * Math.min(1, dt * 8);
-      eagle.y += (ty - eagle.y) * Math.min(1, dt * 8);
-      if (eagle.t <= 0) { eagle.phase = 'lock'; eagle.t = eagle.lockDur = sk.lock; tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!'); }
-    } else if (eagle.phase === 'lock') {
-      moveEagle(eagleAim(sk), sk.speed * sk.home * fast, dt);
-      if (eagle.t <= 0) {
-        if (Math.hypot(fish.x - eagle.x, fish.y - eagle.y) < sk.radius && fish.z < sk.reachZ) { eagle.phase = 'carry'; lose('eagle'); return; }
-        eagleLeave();
+      e.ang += e.dir * EAGLE_CIRCLE.spin * fast * dt;
+      const tx = fish.x + Math.cos(e.ang) * r, ty = fish.y + Math.sin(e.ang) * r;
+      e.x += (tx - e.x) * Math.min(1, dt * 8);
+      e.y += (ty - e.y) * Math.min(1, dt * 8);
+      // Dive, but only once the trout is on the ground, so it can always flop away when the ring
+      // appears; mid-hop, the eagle keeps circling until it lands.
+      if (e.t <= 0 && fish.z === 0 && fish.vz === 0) {
+        // The red ring goes down a little ahead of the trout.
+        const aim = eagleAim(dive().lead);
+        e.phase = 'lock'; e.t = e.lockDur = diveWarn(); e.tx = aim.x; e.ty = aim.y;
+        tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!');
       }
-    } else if (eagle.phase === 'leave') {
-      eagle.x += eagle.vx * dt; eagle.y += eagle.vy * dt;
-      if (eagle.t <= 0) { eagle.phase = 'idle'; eagle.t = sk.rest + rnd(0, 1.5); }
+    } else if (e.phase === 'lock') {
+      // The ring drifts after the trout, slowly; the eagle's shadow swoops onto the ring.
+      const dx = fish.x - e.tx, dy = fish.y - e.ty, d = Math.hypot(dx, dy) || 1;
+      const step = Math.min(diveSteer() * dt, d);
+      e.tx += dx / d * step; e.ty += dy / d * step;
+      e.x += (e.tx - e.x) * Math.min(1, dt * 14);
+      e.y += (e.ty - e.y) * Math.min(1, dt * 14);
+      if (e.t <= 0) {
+        if (Math.hypot(fish.x - e.tx, fish.y - e.ty) < dive().radius && fish.z < sk.reachZ) {
+          e.x = e.tx; e.y = e.ty; e.phase = 'carry'; eagleCatcher = e; lose('eagle'); return;
+        }
+        eagleLeave(e);
+      }
+    } else if (e.phase === 'leave') {
+      e.x += e.vx * dt; e.y += e.vy * dt;
+      if (e.t <= 0) { e.phase = 'idle'; const [r0, r1] = dive().rest; e.t = r0 + rnd(0, r1); }
     }
     // Turn the silhouette to face where it's flying (its head points up when unrotated).
-    const mx = eagle.x - px, my = eagle.y - py;
+    const mx = e.x - px, my = e.y - py;
     if (Math.hypot(mx, my) > 0.5 && Math.hypot(mx, my) < 150) {
-      eagle.heading = (eagle.heading || 0) + angleDiff(Math.atan2(my, mx) + Math.PI / 2, eagle.heading || 0) * Math.min(1, dt * 10);
+      e.heading = (e.heading || 0) + angleDiff(Math.atan2(my, mx) + Math.PI / 2, e.heading || 0) * Math.min(1, dt * 10);
     }
   }
 
   // ---------- herons ----------
   // Great blue herons stand on fallen logs, one heron per log: none before round 10, then one
-  // more every 10 rounds (1 in rounds 10–19, 2 in 20–29, … 10 at round 100). Each heron walks
+  // more every 10 rounds (1 in rounds 10–19, 2 in 20–29, … 9 in 90–99; none in winter). Each heron walks
   // along its log to keep level with the trout. When the trout comes within reach it draws its
   // neck back (the warning), then spears the spot it aimed at. Herons have the same skill every round.
-  const HERON = { speed: 45, reach: 80, hit: 26, cock: 0.45, strike: 0.16, recover: 1.1, rest: 18 };
-  const heronCount = n => (n < 10 ? 0 : Math.floor(Math.min(n, MAX_ROUND) / 10));
+  const HERON = { speed: 45, reach: 160, hit: 26, cock: 0.45, strike: 0.16, recover: 1.1, rest: 18 };
+  // Herons fly south for the winter, so none from WINTER_FROM on.
+  const heronCount = n => (n < 10 || n >= WINTER_FROM ? 0 : Math.floor(n / 10));
   let herons = [], heronCatcher = null;
   const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
   const makeHeron = log => ({ log, x: log.x + log.w / 2, y: log.y + log.h / 2, angle: 0, state: 'wade', t: 0, tx: 0, ty: 0, neck: HERON.rest });
@@ -669,7 +778,7 @@ button { touch-action: manipulation; }
         h.y = Math.max(a, Math.min(b, h.y + step));
       }
       const d = prey ? Math.hypot(prey.x - h.x, prey.y - h.y) : Infinity;
-      const want = d < 220 ? Math.atan2(prey.y - h.y, prey.x - h.x) : 0;
+      const want = d < HERON.reach + 140 ? Math.atan2(prey.y - h.y, prey.x - h.x) : 0;
       h.angle += angleDiff(want, h.angle) * Math.min(1, dt * 4);
       h.neck += (HERON.rest - h.neck) * Math.min(1, dt * 6);
       if (d < HERON.reach && prey.z < 20) {
@@ -720,7 +829,29 @@ button { touch-action: manipulation; }
     }
   }
 
+  // Falling snow in winter, in screen space: light at round 100, heavier toward round 199.
+  // With reduced motion the flakes hold still.
+  function updateSnowfall(dt) {
+    const want = !winter ? 0 : Math.min(420, Math.round((40 + 220 * snow) * (W * H) / (412 * 915)));
+    while (flakes.length < want) flakes.push({ x: Math.random() * W, y: Math.random() * H, r: rnd(1, 2.8), vy: rnd(30, 70), ph: rnd(0, 6) });
+    if (flakes.length > want) flakes.length = want;
+    if (reduced) return;
+    for (const f of flakes) {
+      f.y += f.vy * dt; f.x += Math.sin(clock * 0.8 + f.ph) * 14 * dt;
+      if (f.y > H + 4) { f.y = -4; f.x = Math.random() * W; }
+      if (f.x < 0) f.x += W; else if (f.x > W) f.x -= W;
+    }
+  }
+  function drawSnowfall() {
+    if (!flakes.length) return;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    for (const f of flakes) { ctx.moveTo(f.x + f.r, f.y); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); }
+    ctx.fill();
+  }
+
   function updateCanoe(dt) {
+    if (winter) { canoe.active = false; return; } // no paddling on a frozen river
     if (!canoe.active) {
       canoe.t -= dt;
       if (canoe.t <= 0) {
@@ -755,7 +886,7 @@ button { touch-action: manipulation; }
           tone(120, 0.08, 'sine', 0.12);
         }
       } else {
-        const k = Math.max(0, 1 - 7 * dt);
+        const k = Math.max(0, 1 - (onIce() ? 1.8 : 7) * dt); // the trout slides much farther on ice
         fish.vx *= k; fish.vy *= k;
         if (Math.hypot(fish.vx, fish.vy) < 4) fish.vx = fish.vy = 0;
       }
@@ -771,7 +902,7 @@ button { touch-action: manipulation; }
         }
       }
       updatePowerup(dt);
-      updateEagle(dt);
+      for (const e of eagles) updateEagle(e, dt);
       updateHerons(dt);
       if (mode === 'play') {
         if (inRiver()) reachRiver();
@@ -779,19 +910,29 @@ button { touch-action: manipulation; }
       }
       updateHud();
     } else if (mode === 'saved') {
-      // Swim off downstream.
-      const target = (farAt(fish.y) + shoreAt(fish.y)) / 2;
-      fish.z = Math.max(0, fish.z - 300 * dt);
-      fish.x += (target - fish.x) * Math.min(1, dt * 2);
-      fish.y += 160 * dt;
+      if (savedHole) {
+        // Slip down into the ice hole.
+        fish.z = 0; fish.vx = fish.vy = 0;
+        fish.x += (savedHole.x - fish.x) * Math.min(1, dt * 8);
+        fish.y += (savedHole.y - fish.y) * Math.min(1, dt * 8);
+      } else {
+        // Swim off downstream.
+        const target = (farAt(fish.y) + shoreAt(fish.y)) / 2;
+        fish.z = Math.max(0, fish.z - 300 * dt);
+        fish.x += (target - fish.x) * Math.min(1, dt * 2);
+        fish.y += 160 * dt;
+        fish.angle += (Math.PI / 2 - fish.angle) * Math.min(1, dt * 4);
+      }
       updateHerons(dt);
-      fish.angle += (Math.PI / 2 - fish.angle) * Math.min(1, dt * 4);
       fish.alpha = Math.max(0, stateTimer / 1.4);
       stateTimer -= dt;
-      if (stateTimer <= 0) { level++; makeLevel(level); mode = 'play'; updateHud(); announce('Round ' + level + ', ' + place + '.'); }
+      if (stateTimer <= 0) {
+        level++; makeLevel(level); mode = 'play'; updateHud();
+        announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + place + '.');
+      }
     } else if (mode === 'dying') {
       updateHerons(dt);
-      if (deathBy === 'eagle') { fish.lift += dt * 1.5; eagle.y -= 260 * dt; fish.y -= 260 * dt; }
+      if (deathBy === 'eagle' && eagleCatcher) { fish.lift += dt * 1.5; eagleCatcher.y -= 260 * dt; fish.y -= 260 * dt; }
       if (deathBy === 'heron' && heronCatcher) {
         // Held up in the heron's bill.
         const h = heronCatcher;
@@ -807,7 +948,8 @@ button { touch-action: manipulation; }
 
     for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; }
     parts = parts.filter(p => p.life > 0);
-    for (const r of ripples) { r.age += dt; r.y += 50 * dt; }
+    for (const r of ripples) { r.age += dt; r.y += (winter ? 0 : 50) * dt; } // still water in an ice hole
+    updateSnowfall(dt);
     ripples = ripples.filter(r => r.age < 1.4);
   }
 
@@ -818,20 +960,43 @@ button { touch-action: manipulation; }
     return 'rgb(' + a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',') + ')';
   }
 
+  // Autumn grass, or winter's dead brown grass.
+  const groundColor = () => (winter ? '#a2946a' : '#7c9c52');
+  const onScreen = (x, pad) => x > cam - pad && x < cam + view.w + pad;
+  const snowColor = a => 'rgba(246,249,251,' + a + ')';
+  const SNOW = snowColor(0.92);
   function drawGround(sec) {
-    ctx.fillStyle = '#7c9c52'; ctx.fillRect(-2000, -2000, WW + 4000, WH + 4000);
-    // mown-grass stripes
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    for (let y = -200; y < WH + 200; y += 60) ctx.fillRect(-2000, y, WW + 4000, 30);
+    ctx.fillStyle = groundColor(); ctx.fillRect(-2000, -2000, WW + 4000, WH + 4000);
+    // mown-grass stripes (autumn only)
+    if (!winter) {
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      for (let y = -200; y < WH + 200; y += 60) ctx.fillRect(-2000, y, WW + 4000, 30);
+    }
     for (const l of leaves) {
-      if (l.x < cam - 20 || l.x > cam + view.w + 20) continue; // only the leaves on screen
+      if (!onScreen(l.x, 20)) continue; // only the leaves on screen
       ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
       ctx.fillStyle = l.c; ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
       ctx.restore();
     }
+    if (winter && snow > 0) {
+      // Snow: a blanket that thickens toward round 199, plus drifts that grow and merge.
+      ctx.fillStyle = 'rgba(244,247,250,' + 0.85 * Math.pow(snow, 1.4) + ')';
+      ctx.fillRect(-2000, -2000, WW + 4000, WH + 4000);
+      // Drifts with soft edges, so they blend into the blanket instead of reading as shapes.
+      for (const d of drifts) {
+        if (!onScreen(d.x, d.rx + 20)) continue;
+        ctx.save();
+        ctx.translate(d.x, d.y); ctx.rotate(d.a); ctx.scale(1, d.ry / d.rx);
+        const g = ctx.createRadialGradient(0, 0, d.rx * 0.2, 0, 0, d.rx);
+        g.addColorStop(0, snowColor(0.9)); g.addColorStop(0.6, snowColor(0.55)); g.addColorStop(1, snowColor(0));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, d.rx, 0, 7); ctx.fill();
+        ctx.restore();
+      }
+    }
   }
 
   function drawRiver(sec) {
+    if (winter) { drawIce(sec); return; }
     ctx.beginPath();
     ctx.moveTo(farAt(-400), -400);
     for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y), y);
@@ -902,15 +1067,77 @@ button { touch-action: manipulation; }
     }
   }
 
+  // Frozen river: snow-dusted ice with cracks, and ice-fishing holes, the only way back in.
+  function drawIce(sec) {
+    const icePath = () => {
+      ctx.beginPath();
+      ctx.moveTo(farAt(-400), -400);
+      for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y), y);
+      for (let y = WH + 400; y >= -400; y -= 10) ctx.lineTo(shoreAt(y), y);
+      ctx.closePath();
+    };
+    icePath();
+    const g = ctx.createLinearGradient(river.far, 0, river.base + 30, 0);
+    g.addColorStop(0, '#b5cfd9'); g.addColorStop(1, '#dbe9ef');
+    ctx.fillStyle = g; ctx.fill();
+    if (snow > 0) { icePath(); ctx.fillStyle = snowColor(0.6 * snow); ctx.fill(); }
+    // Cracks, stored as a fraction of the way across the ice so they follow the banks.
+    ctx.strokeStyle = 'rgba(110,150,170,0.5)'; ctx.lineWidth = 1.2;
+    for (const c of cracks) {
+      ctx.beginPath();
+      c.forEach(([lane, y], i) => { const fx = farAt(y), x = fx + (shoreAt(y) - fx) * lane; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
+    }
+    for (const p of pebbles) {
+      ctx.fillStyle = shadeHex(p.c, '#f4f7fa', 0.3 + 0.6 * snow);
+      ctx.beginPath(); ctx.arc(shoreAt(p.y) + p.dx, p.y, p.r, 0, 7); ctx.fill();
+    }
+    for (const h of holes) {
+      ctx.fillStyle = '#eef5f8';
+      ctx.beginPath(); ctx.ellipse(h.x, h.y, h.r + 6, h.r + 4, 0, 0, 7); ctx.fill();
+      const w = ctx.createRadialGradient(h.x - 4, h.y - 4, 2, h.x, h.y, h.r);
+      w.addColorStop(0, '#2a6a72'); w.addColorStop(1, '#0f3640');
+      ctx.fillStyle = w; ctx.beginPath(); ctx.ellipse(h.x, h.y, h.r, h.r * 0.85, 0, 0, 7); ctx.fill();
+      if (!reduced) {
+        const k = (sec * 0.6 + h.seed) % 1;
+        ctx.strokeStyle = 'rgba(220,240,245,' + 0.5 * (1 - k) + ')'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.ellipse(h.x, h.y, h.r * k, h.r * 0.85 * k, 0, 0, 7); ctx.stroke();
+      }
+    }
+  }
+
+  // Ice fisher from above: seated on an overturned bucket in a parka and knit hat, jigging a
+  // short rod into the hole, with a tip-up flag on the other side.
+  function drawIceFisher(h, sec) {
+    const bx = h.x - 32, by = h.y + 4, fx = h.x + 28, fy = h.y - 12;
+    const wave = reduced ? 0 : Math.sin(sec * 4 + h.seed) * 2;
+    ctx.strokeStyle = '#3a2a1a'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(fx, fy + 8); ctx.lineTo(fx, fy - 8); ctx.stroke();
+    ctx.fillStyle = '#e8622c';
+    ctx.beginPath(); ctx.moveTo(fx, fy - 8); ctx.lineTo(fx + 12, fy - 5 + wave); ctx.lineTo(fx, fy - 1); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(40,60,70,0.22)'; ctx.beginPath(); ctx.ellipse(bx + 4, by + 5, 15, 12, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#d9dde0'; ctx.beginPath(); ctx.arc(bx, by, 11, 0, 7); ctx.fill();
+    ctx.fillStyle = h.coat; ctx.beginPath(); ctx.ellipse(bx, by, 10, 12, 0, 0, 7); ctx.fill();
+    const jig = reduced ? 0 : Math.sin(sec * 2.2 + h.seed) * 1.5;
+    ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(bx + 7, by - 2); ctx.lineTo(h.x - 12, h.y - 4 + jig); ctx.stroke();
+    ctx.strokeStyle = 'rgba(240,240,240,0.9)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(h.x - 12, h.y - 4 + jig); ctx.lineTo(h.x - 4, h.y); ctx.stroke();
+    ctx.fillStyle = '#e8c040'; ctx.beginPath(); ctx.arc(bx, by, 6.5, 0, 7); ctx.fill();
+    ctx.fillStyle = '#f7f7f2'; ctx.beginPath(); ctx.arc(bx - 2, by - 2, 2.5, 0, 7); ctx.fill();
+  }
+
   // Limestone bluff across the river: ledges step back from the water, cedars cling to the rim.
+  // In winter the ledges whiten as snow builds up.
   function drawBluff() {
     const edge = off => { ctx.beginPath(); for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y) + off, y); };
+    const snowy = c => (winter ? shadeHex(c, '#eef2f4', 0.2 + 0.65 * snow) : c);
     ctx.beginPath(); ctx.moveTo(-2000, -400);
     for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(farAt(y), y);
     ctx.lineTo(-2000, WH + 400); ctx.closePath();
-    ctx.fillStyle = '#b9b09b'; ctx.fill();
+    ctx.fillStyle = snowy('#b9b09b'); ctx.fill();
     const bands = [['#d6cdb8', 10, -6], ['#a59b86', 4, -14], ['#cbc2ac', 9, -22], ['#9a907b', 3, -31], ['#c4bba5', 8, -40]];
-    for (const [c, w, off] of bands) { edge(off); ctx.strokeStyle = c; ctx.lineWidth = w; ctx.stroke(); }
+    for (const [c, w, off] of bands) { edge(off); ctx.strokeStyle = snowy(c); ctx.lineWidth = w; ctx.stroke(); }
     edge(9); ctx.strokeStyle = 'rgba(10,30,30,0.22)'; ctx.lineWidth = 14; ctx.stroke();
     for (const t of talus) { ctx.fillStyle = t.c; ctx.beginPath(); ctx.arc(farAt(t.y) + t.dx, t.y, t.r, 0, 7); ctx.fill(); }
     ctx.strokeStyle = 'rgba(90,80,65,0.45)'; ctx.lineWidth = 1.5;
@@ -922,6 +1149,7 @@ button { touch-action: manipulation; }
       const x = farAt(c.y) + c.dx - 30;
       ctx.fillStyle = 'rgba(30,40,20,0.3)'; ctx.beginPath(); ctx.arc(x + 5, c.y + 6, c.r, 0, 7); ctx.fill();
       ctx.fillStyle = c.c; ctx.beginPath(); ctx.arc(x, c.y, c.r, 0, 7); ctx.fill();
+      if (winter && snow > 0.05) { ctx.fillStyle = SNOW; ctx.beginPath(); ctx.arc(x - c.r * 0.25, c.y - c.r * 0.25, c.r * (0.3 + 0.45 * snow), 0, 7); ctx.fill(); }
     }
   }
 
@@ -997,6 +1225,14 @@ button { touch-action: manipulation; }
       ctx.strokeStyle = 'rgba(255,255,255,' + 0.5 * (1 - ring) + ')'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r * k * ring, 0, 7); ctx.stroke();
     }
+    // Decorah's springs stay about 48°F all year, so in winter they stay open and steam.
+    if (winter && k > 0) {
+      for (let i = 0; i < 3; i++) {
+        const t = reduced ? 0.4 : (clock * 0.35 + i / 3) % 1;
+        ctx.fillStyle = 'rgba(255,255,255,' + 0.3 * (1 - t) + ')';
+        ctx.beginPath(); ctx.arc(s.x + (reduced ? 0 : Math.sin(clock + i * 2) * 8), s.y - t * s.r * 0.8, s.r * (0.2 + 0.3 * t), 0, 7); ctx.fill();
+      }
+    }
   }
 
   function drawLog(l) {
@@ -1006,6 +1242,10 @@ button { touch-action: manipulation; }
     for (let y = l.y + 12; y < l.y + l.h - 6; y += 16) { ctx.beginPath(); ctx.moveTo(l.x + 3, y); ctx.lineTo(l.x + l.w - 4, y + 5); ctx.stroke(); }
     ctx.fillStyle = '#c99b66';
     ctx.beginPath(); ctx.ellipse(l.x + l.w / 2, l.y, l.w / 2, 5, 0, 0, 7); ctx.fill();
+    if (winter && snow > 0.02) { // snow along the top of the log, widening as it builds
+      ctx.fillStyle = SNOW;
+      ctx.fillRect(l.x + 2, l.y + 3, Math.max(3, (l.w - 4) * Math.min(1, 0.25 + snow)), l.h - 6);
+    }
   }
 
   function drawBoulder(b) {
@@ -1021,18 +1261,24 @@ button { touch-action: manipulation; }
     ctx.beginPath(); ctx.moveTo(b.x - b.r * 0.6, b.y - b.r * 0.1); ctx.lineTo(b.x + b.r * 0.5, b.y - b.r * 0.25);
     ctx.moveTo(b.x - b.r * 0.4, b.y + b.r * 0.35); ctx.lineTo(b.x + b.r * 0.6, b.y + b.r * 0.2); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.25, 0, 7); ctx.fill();
+    if (winter && snow > 0.02) { // snow cap, growing over the winter
+      ctx.fillStyle = SNOW;
+      ctx.beginPath(); ctx.ellipse(b.x - b.r * 0.15, b.y - b.r * 0.2, b.r * (0.4 + 0.45 * snow), b.r * (0.3 + 0.4 * snow), -0.5, 0, 7); ctx.fill();
+    }
   }
 
   // ---------- forest ----------
-  // Northeast Iowa hardwoods in late October, plus a few evergreens. Each tree's leaf clumps
-  // mostly use its own species' colors; some trees are still turning and mix in a second set.
+  // Northeast Iowa hardwoods plus a few evergreens. Through autumn (rounds 1–99) each species turns
+  // from summer green to its fall color on its own schedule, as a fraction of the season: ash and
+  // hickory go yellow first, then sugar maples orange, red maples red, and the oaks russet last.
+  // Clumps within a tree turn a little unevenly. In winter the hardwoods are bare.
+  const SUMMER = ['#5f7f3a', '#6e8c42', '#4f6d33', '#7b9446'];
   const SPECIES = [
-    { w: 3, pal: ['#c4372b', '#d8532f', '#e0743a', '#a8282a'] }, // red maple
-    { w: 3, pal: ['#e0782c', '#f0a03a', '#d55f22', '#e88a2e'] }, // sugar maple
-    { w: 2, pal: ['#8e4a28', '#a65a2e', '#7a3f22', '#b5713a'] }, // bur and red oak
-    { w: 2, pal: ['#e8c040', '#d9a92c', '#f2d460', '#c99a28'] }, // ash, hickory, basswood
-    { w: 2, pal: ['#5f7f3a', '#6e8c42', '#4f6d33', '#7b9446'] }, // not turned yet
-    { w: 1, pal: ['#2f4a33', '#3b5a3c', '#29402c'] }             // white pine, red cedar
+    { w: 2, pal: ['#e8c040', '#d9a92c', '#f2d460', '#c99a28'], turn: [0, 0.45] },   // ash, hickory, basswood
+    { w: 3, pal: ['#e0782c', '#f0a03a', '#d55f22', '#e88a2e'], turn: [0.15, 0.6] }, // sugar maple
+    { w: 3, pal: ['#c4372b', '#d8532f', '#e0743a', '#a8282a'], turn: [0.3, 0.75] }, // red maple
+    { w: 2, pal: ['#8e4a28', '#a65a2e', '#7a3f22', '#b5713a'], turn: [0.55, 1] },   // bur and red oak
+    { w: 1, pal: ['#2f4a33', '#3b5a3c', '#29402c'], evergreen: true }              // white pine, red cedar
   ];
   const SPECIES_TOTAL = SPECIES.reduce((s, sp) => s + sp.w, 0);
   const pickOne = a => a[Math.floor(Math.random() * a.length)];
@@ -1046,14 +1292,39 @@ button { touch-action: manipulation; }
     return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * k).toString(16).padStart(2, '0')).join('');
   }
   function makeTree(x, y, r, dim) {
-    const sp = pickSpecies(), sp2 = Math.random() < 0.3 ? pickSpecies() : sp;
-    const lobes = [{ dx: 0, dy: 0, r: r * 0.62, c: pickOne(sp.pal) }];
+    const sp = pickSpecies();
+    // How far this tree has turned this round: 0 = summer green, 1 = full fall color.
+    const turned = sp.evergreen ? 0 : clamp01((fall - sp.turn[0]) / (sp.turn[1] - sp.turn[0]));
+    const clump = () => sp.evergreen ? pickOne(sp.pal)
+      : shadeHex(pickOne(SUMMER), pickOne(sp.pal), clamp01(turned * 1.2 + rnd(-0.2, 0.2)));
+    const lobes = [{ dx: 0, dy: 0, r: r * 0.62, c: clump() }];
     const n = 6 + Math.floor(r / 10);
     for (let i = 0; i < n; i++) {
       const a = i / n * Math.PI * 2 + rnd(-0.3, 0.3), d = r * rnd(0.35, 0.6);
-      lobes.push({ dx: Math.cos(a) * d, dy: Math.sin(a) * d, r: r * rnd(0.32, 0.5), c: pickOne(Math.random() < 0.75 ? sp.pal : sp2.pal) });
+      lobes.push({ dx: Math.cos(a) * d, dy: Math.sin(a) * d, r: r * rnd(0.32, 0.5), c: clump() });
     }
-    return { x, y, r, dim, lobes };
+    return { x, y, r, dim, lobes, bare: winter && !sp.evergreen };
+  }
+  // A leafless hardwood from above: limbs radiating from the trunk and forking toward the tips.
+  // Snow settles along the limbs, on more of them as winter goes on.
+  function paintBareTree(g, t) {
+    const bark = t.dim ? shadeHex('#5b4a3b', '#1f2b22', t.dim) : '#5b4a3b';
+    g.lineCap = 'round';
+    const branch = (x, y, a, len, w, depth) => {
+      const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
+      g.strokeStyle = bark; g.lineWidth = w;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(ex, ey); g.stroke();
+      if (snow > 0 && Math.random() < 0.2 + snow * 0.8) {
+        g.strokeStyle = SNOW; g.lineWidth = Math.max(1, w * 0.55);
+        g.beginPath(); g.moveTo(x - 0.8, y - 0.8); g.lineTo(ex - 0.8, ey - 0.8); g.stroke();
+      }
+      if (depth > 0) for (const s of [-1, 1]) branch(ex, ey, a + s * rnd(0.3, 0.6), len * rnd(0.5, 0.7), w * 0.6, depth - 1);
+    };
+    const limbs = 6 + Math.floor(t.r / 9);
+    for (let i = 0; i < limbs; i++) {
+      branch(t.x, t.y, i / limbs * Math.PI * 2 + rnd(-0.25, 0.25), t.r * rnd(0.4, 0.55), Math.max(1.5, t.r / 12), 2);
+    }
+    g.fillStyle = bark; g.beginPath(); g.arc(t.x, t.y, Math.max(2.5, t.r / 9), 0, Math.PI * 2); g.fill();
   }
   function paintShadow(g, t) {
     const off = t.r * 0.32;
@@ -1084,6 +1355,16 @@ button { touch-action: manipulation; }
       g.fillStyle = Math.random() < 0.5 ? 'rgba(255,240,200,0.18)' : 'rgba(30,20,10,0.18)';
       g.beginPath(); g.arc(t.x + Math.cos(a) * d, t.y + Math.sin(a) * d, rnd(1, 2.6), 0, Math.PI * 2); g.fill();
     }
+    // Winter: snow caps on the evergreens' clumps, more of them as the snow builds.
+    if (snow > 0) {
+      g.fillStyle = SNOW;
+      for (const l of t.lobes) {
+        if (Math.random() > 0.2 + snow * 0.8) continue;
+        g.beginPath();
+        g.ellipse(t.x + l.dx - l.r * 0.2, t.y + l.dy - l.r * 0.25, l.r * (0.35 + 0.4 * snow), l.r * (0.25 + 0.3 * snow), -0.4, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
   }
   // The forest is drawn once per round into its own canvas, then copied each frame.
   // It's only painted as deep into the woods as the camera can show: on a phone the view never
@@ -1102,7 +1383,8 @@ button { touch-action: manipulation; }
     const g = c.getContext('2d');
     g.scale(k, k); g.translate(-x0, -y0);
     const floor = g.createLinearGradient(TREES - 20, 0, TREES + 90, 0);
-    floor.addColorStop(0, 'rgba(60,80,40,0)'); floor.addColorStop(1, 'rgba(60,80,40,0.6)');
+    const shade = winter ? '70,72,80' : '60,80,40'; // cool shade on snow, green shade on grass
+    floor.addColorStop(0, 'rgba(' + shade + ',0)'); floor.addColorStop(1, 'rgba(' + shade + ',' + (winter ? 0.35 : 0.6) + ')');
     g.fillStyle = floor; g.fillRect(TREES - 20, y0, x1 - TREES + 20, y1 - y0);
     // Rows from deep in the woods out to the bank edge: farther rows are smaller and darker.
     const rows = [
@@ -1123,8 +1405,8 @@ button { touch-action: manipulation; }
         }
       }
       list.sort((a, b) => a.y - b.y);
-      for (const t of list) paintShadow(g, t);
-      for (const t of list) paintTree(g, t);
+      for (const t of list) if (!t.bare) paintShadow(g, t);
+      for (const t of list) (t.bare ? paintBareTree : paintTree)(g, t);
     }
     treeLayer = { canvas: c, x: x0, y: y0, w: x1 - x0, h: y1 - y0, reach };
   }
@@ -1273,21 +1555,22 @@ button { touch-action: manipulation; }
     }
   }
 
-  function drawEagle() {
-    if (eagle.phase === 'off' || eagle.phase === 'idle') return;
-    const locking = eagle.phase === 'lock';
-    const k = locking ? Math.min(1, 1 - eagle.t / (eagle.lockDur || 0.75)) : 0;
+  function drawEagle(e) {
+    if (e.phase === 'off' || e.phase === 'idle') return;
+    const locking = e.phase === 'lock';
+    const k = locking ? Math.min(1, 1 - e.t / (e.lockDur || 0.75)) : 0;
     // Size the silhouette (wingtips at ±60 when unscaled) so the wingtips land exactly on the
     // strike ring at the moment it hits: whatever the wings cover then is what gets caught.
-    const fit = EAGLE.radius / 60;
-    const sc = fit * (eagle.phase === 'carry' ? 1.1 : 1.5 - k * 0.5);
-    ctx.save();
-    ctx.translate(eagle.x, eagle.y);
-    if (locking) {
+    const fit = dive().radius / 60;
+    const sc = fit * (e.phase === 'carry' ? 1.1 : 1.5 - k * 0.5);
+    if (locking && mode === 'play') {
+      // The red ring marks exactly where the dive will strike; leave it to escape.
       ctx.strokeStyle = 'rgba(200,65,47,' + (0.4 + 0.5 * k) + ')'; ctx.lineWidth = 3;
-      ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.arc(0, 0, EAGLE.radius, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+      ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.arc(e.tx, e.ty, dive().radius, 0, 7); ctx.stroke(); ctx.setLineDash([]);
     }
-    ctx.rotate(eagle.heading || 0);
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    ctx.rotate(e.heading || 0);
     ctx.scale(sc, sc);
     ctx.fillStyle = 'rgba(15,22,12,' + (0.28 + k * 0.25) + ')';
     // wingspan silhouette, head toward the top
@@ -1305,7 +1588,7 @@ button { touch-action: manipulation; }
     if (!ptr || !canFlop()) return;
     const dx = (ptr.x - ptr.x0) * (flip ? -1 : 1), dy = ptr.y - ptr.y0, dist = Math.hypot(dx, dy);
     if (dist < 14) return;
-    const mag = swipeMag(dist), air = 2 * 360 / GRAV, reach = mag * air;
+    const mag = swipeMag(dist) * flopScale(), air = 2 * 360 / GRAV, reach = mag * air;
     const ux = dx / dist, uy = dy / dist;
     ctx.fillStyle = 'rgba(250,249,243,0.85)';
     for (let i = 1; i <= 10; i++) {
@@ -1325,7 +1608,7 @@ button { touch-action: manipulation; }
 
   function draw(now) {
     const sec = now / 1000;
-    ctx.fillStyle = '#7c9c52'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = groundColor(); ctx.fillRect(0, 0, W, H);
     ctx.save();
     ctx.translate(0, view.oy); ctx.scale(view.s, view.s);
     if (flip) { ctx.translate(cam + view.w, 0); ctx.scale(-1, 1); } else ctx.translate(-cam, 0);
@@ -1333,6 +1616,7 @@ button { touch-action: manipulation; }
     drawRiver(sec);
     drawBluff();
     for (const a of anglers) drawAngler(a, sec);
+    for (const h of holes) drawIceFisher(h, sec);
     if (canoe.active) drawCanoe(sec);
     // Splash rings spreading out and drifting with the current.
     for (const r of ripples) {
@@ -1356,15 +1640,20 @@ button { touch-action: manipulation; }
     }
     ctx.globalAlpha = 1;
     drawAim();
-    drawEagle();
+    for (const e of eagles) drawEagle(e);
     ctx.restore();
+
+    drawSnowfall();
 
     // Text stays unmirrored, in screen space.
     const fs = Math.max(0.7, view.s);
     // While the river is off screen, a tag on that edge points to it with the distance in feet.
     if (mode === 'play' && shoreAt(fish.y) < cam) {
-      const feet = Math.max(1, Math.round((fish.x - shoreAt(fish.y)) / 43));
-      const label = flip ? 'River ' + feet + ' ft ▶' : '◀ River ' + feet + ' ft';
+      // In winter it points to the nearest ice-fishing hole instead.
+      const hole = winter ? holes.reduce((b, h) => (!b || Math.hypot(h.x - fish.x, h.y - fish.y) < Math.hypot(b.x - fish.x, b.y - fish.y) ? h : b), null) : null;
+      const away = hole ? Math.hypot(hole.x - fish.x, hole.y - fish.y) : fish.x - shoreAt(fish.y);
+      const feet = Math.max(1, Math.round(away / 43)), name = hole ? 'Ice hole' : 'River';
+      const label = flip ? name + ' ' + feet + ' ft ▶' : '◀ ' + name + ' ' + feet + ' ft';
       ctx.font = '800 ' + Math.round(15 * fs) + 'px Nunito, system-ui, sans-serif';
       const tw = ctx.measureText(label).width + 22, th = 30 * fs;
       const tx = flip ? W - 12 - tw : 12;
@@ -1380,7 +1669,7 @@ button { touch-action: manipulation; }
     if (mode === 'play' && seasonTimer > 0) {
       // Fade in over 0.4 s, hold, fade out over the last 0.5 s, in sugar-maple orange.
       ctx.globalAlpha = Math.max(0, Math.min(1, seasonTimer / 0.5, (SEASON_TIME - seasonTimer) / 0.4));
-      screenText('Autumn', W / 2, view.oy + 250 * view.s, 64 * fs, '#f0a03a');
+      screenText(seasonName, W / 2, view.oy + 250 * view.s, 64 * fs, winter ? '#d6ecf7' : '#f0a03a');
       ctx.globalAlpha = 1;
     } else if (mode === 'play' && bannerTimer > 0) {
       ctx.globalAlpha = Math.min(1, bannerTimer);
@@ -1409,6 +1698,7 @@ button { touch-action: manipulation; }
     level = savedRound;
     makeLevel(level); // the bank behind the start card is the round they'll play
     layoutReady = true;
+    restartBtn.hidden = savedRound <= 1;
     addEventListener('resize', resize);
     requestAnimationFrame(frame);
     try { $('startBtn').focus({ preventScroll: true }); } catch (e) {}

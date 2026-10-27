@@ -80,20 +80,31 @@ button { touch-action: manipulation; }
   background: rgba(31, 43, 34, 0.25);
 }
 .card {
-  margin: auto; flex-shrink: 0;
+  margin: auto; flex-shrink: 0; box-sizing: border-box; /* padding inside the width, so it fits the screen */
   width: min(370px, 100%); display: grid; gap: 14px; justify-items: center; text-align: center;
   padding: 26px 22px 24px; background: var(--card); border: 2px solid var(--line); border-radius: 24px;
   box-shadow: 0 18px 50px rgba(31, 43, 34, 0.3);
 }
 .card h1, .card h2 { margin: 0; font-family: var(--display); font-weight: 700; line-height: 0.95; text-wrap: balance; color: var(--ink); }
-.card h1 { font-size: 48px; }
+.card h1 { font-size: 46px; }
 .card h1 span { color: var(--trout); }
 .card h2 { font-size: 34px; }
 .place { font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--leaf); }
 .card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 32ch; }
-.rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; text-align: left; font-size: 15px; }
-.rules li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: center; }
-.rules b { font-family: var(--display); font-weight: 700; font-size: 18px; text-align: center; color: var(--river); }
+/* Start card: controls as two tiles, a one-line note, then what later rounds bring. */
+.card .lede { color: var(--ink); font-size: 16px; line-height: 1.4; }
+.controls { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.control {
+  display: grid; gap: 2px; align-content: start; min-width: 0; text-align: left;
+  padding: 10px 12px; border-radius: 14px; background: rgba(44, 111, 116, 0.09);
+}
+.control b { font-family: var(--display); font-weight: 600; font-size: 19px; line-height: 1.1; color: var(--river); }
+.control span { font-size: 13px; line-height: 1.35; color: var(--muted); }
+.card .note { font-size: 13px; line-height: 1.45; }
+.later { width: 100%; display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); text-align: left; }
+.schedule { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.schedule li { display: grid; grid-template-columns: 4.7em 1fr; gap: 8px; align-items: baseline; font-size: 14px; line-height: 1.35; }
+.schedule .when { font-family: var(--display); font-weight: 600; color: var(--trout); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .result { display: flex; gap: 28px; justify-content: center; }
 .result .stat { justify-items: center; }
 .newbest { color: var(--leaf); font-weight: 800; font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -124,17 +135,20 @@ button { touch-action: manipulation; }
   <div class="card">
     <span class="place">Upper Iowa River · Decorah</span>
     <h1 id="startTitle">Trout <span>Trot</span></h1>
-    <p>You're a rainbow trout stranded on the river bank. Flop back into the water before you dry out.</p>
-    <ul class="rules">
-      <li><b>↔</b>Swipe side to side to flop. A longer swipe makes a bigger flop.</li>
-      <li><b>•</b>Tap beside the trout for a short hop.</li>
-      <li><b>≈</b>Cold springs top up your moisture.</li>
-      <li><b>▲</b>From round <span data-rule="heronFrom">5</span>, a great blue heron guards the water's edge. When it pulls its neck back, flop out of its ring.</li>
-      <li><b>✦</b>From round <span data-rule="invisFrom">9</span>, grab the shimmering bubble to turn invisible for <span data-rule="invisTime">6</span> seconds.</li>
-      <li><b>!</b>From round <span data-rule="eagleFrom">10</span>, dodge the bald eagle's shadow.</li>
-      <li><b>→</b>The river is farther away every round.</li>
-    </ul>
-    <p>Every splash back into the river is 1 point.</p>
+    <p class="lede">Flop the stranded trout back into the river before it dries out.</p>
+    <div class="controls">
+      <div class="control"><b>Swipe</b><span>to flop. A longer swipe flops farther.</span></div>
+      <div class="control"><b>Tap</b><span>beside the trout for a short hop.</span></div>
+    </div>
+    <p class="note">Cold springs refill moisture. Each splash scores 1 point, and the river moves farther away every round.</p>
+    <div class="later">
+      <span class="label">Later rounds</span>
+      <ul class="schedule">
+        <li><span class="when">Round <span data-rule="heronFrom">5</span></span><span>A great blue heron guards the bank. Flop out of its ring when it rears back.</span></li>
+        <li><span class="when">Round <span data-rule="invisFrom">9</span></span><span>Grab the shimmering bubble to turn invisible for <span data-rule="invisTime">6</span> seconds.</span></li>
+        <li><span class="when">Round <span data-rule="eagleFrom">10</span></span><span>A bald eagle circles, then dives. Dodge its shadow.</span></li>
+      </ul>
+    </div>
     <button class="play" id="startBtn">Flop!</button>
   </div>
 </div>
@@ -236,7 +250,7 @@ button { touch-action: manipulation; }
     // More springs on wider banks, since the trip takes longer.
     const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
     for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
-      const r = 26, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + 60, TREES - 50);
+      const r = 52, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
       if (clearOf(x, y, r)) { springs.push({ x, y, r, water: 35 }); i++; }
     }
     // Invisibility bubble, somewhere between the trout and the river, and always out of the
@@ -244,9 +258,10 @@ button { touch-action: manipulation; }
     powerup.active = false; invisible = 0;
     if (n >= INVIS_FROM) {
       for (let tries = 0; tries < 200; tries++) {
-        const y = rnd(TOP + 30, BOTTOM - 30), lo = shoreAt(y) + 24 + HERON.reach + 30;
-        const x = rnd(lo, Math.max(lo + 10, fish.x - 140));
-        if (clearOf(x, y, 24)) { powerup.active = true; powerup.x = x; powerup.y = y; break; }
+        // Far enough that a trout touching the bubble's pickup range is still out of reach.
+        const y = rnd(TOP + 50, BOTTOM - 50), lo = shoreAt(y) + 24 + HERON.reach + BUBBLE_GRAB + 10;
+        const x = rnd(lo, Math.max(lo + 10, fish.x - 160));
+        if (clearOf(x, y, BUBBLE_R + 8)) { powerup.active = true; powerup.x = x; powerup.y = y; break; }
       }
     }
 
@@ -537,6 +552,9 @@ button { touch-action: manipulation; }
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
   const visibleTrout = () => (invisible > 0 ? null : fish);
+
+  // Before diving, the eagle circles the trout about once, spiralling in from 150 to 55 units.
+  const EAGLE_CIRCLE = { from: 150, to: 55, time: 2, spin: 3.2 };
   function eagleAim(sk) {
     // Where the trout will be: its landing spot mid-flop, or the end of its slide.
     let tLeft = 1 / 7;
@@ -559,15 +577,30 @@ button { touch-action: manipulation; }
     const sk = EAGLE;
     // When the eagle can't see the trout it flies off, and doesn't return until it can.
     if (!visibleTrout()) {
-      if (eagle.phase === 'track' || eagle.phase === 'lock') eagleLeave();
+      if (eagle.phase === 'track' || eagle.phase === 'circle' || eagle.phase === 'lock') eagleLeave();
       if (eagle.phase === 'idle' && eagle.t <= 0) eagle.t = 0.5;
     }
+    const px = eagle.x, py = eagle.y;
     if (eagle.phase === 'idle' && eagle.t <= 0) {
       eagle.phase = 'track'; eagle.t = sk.track;
       eagle.x = fish.x + rnd(-200, 200); eagle.y = fish.y < WH / 2 ? WH + 80 : -80;
     } else if (eagle.phase === 'track') {
-      const d = moveEagle(eagleAim(sk), sk.speed, dt);
-      if (eagle.t <= 0 && d < 50) { eagle.phase = 'lock'; eagle.t = eagle.lockDur = sk.lock; tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!'); }
+      // Fly in until it's close enough to start circling.
+      const d = moveEagle(fish, sk.speed, dt);
+      if (eagle.t <= 0 && d < EAGLE_CIRCLE.from) {
+        eagle.phase = 'circle'; eagle.t = EAGLE_CIRCLE.time;
+        eagle.ang = Math.atan2(eagle.y - fish.y, eagle.x - fish.x);
+        eagle.dir = Math.random() < 0.5 ? -1 : 1;
+      }
+    } else if (eagle.phase === 'circle') {
+      // Circle the trout, spiralling in from EAGLE_CIRCLE.from to .to, then dive.
+      const k = 1 - Math.max(0, eagle.t) / EAGLE_CIRCLE.time;
+      const r = EAGLE_CIRCLE.from + (EAGLE_CIRCLE.to - EAGLE_CIRCLE.from) * k;
+      eagle.ang += eagle.dir * EAGLE_CIRCLE.spin * dt;
+      const tx = fish.x + Math.cos(eagle.ang) * r, ty = fish.y + Math.sin(eagle.ang) * r;
+      eagle.x += (tx - eagle.x) * Math.min(1, dt * 8);
+      eagle.y += (ty - eagle.y) * Math.min(1, dt * 8);
+      if (eagle.t <= 0) { eagle.phase = 'lock'; eagle.t = eagle.lockDur = sk.lock; tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!'); }
     } else if (eagle.phase === 'lock') {
       moveEagle(eagleAim(sk), sk.speed * sk.home, dt);
       if (eagle.t <= 0) {
@@ -577,6 +610,11 @@ button { touch-action: manipulation; }
     } else if (eagle.phase === 'leave') {
       eagle.x += eagle.vx * dt; eagle.y += eagle.vy * dt;
       if (eagle.t <= 0) { eagle.phase = 'idle'; eagle.t = sk.rest + rnd(0, 1.5); }
+    }
+    // Turn the silhouette to face where it's flying (its head points up when unrotated).
+    const mx = eagle.x - px, my = eagle.y - py;
+    if (Math.hypot(mx, my) > 0.5 && Math.hypot(mx, my) < 150) {
+      eagle.heading = (eagle.heading || 0) + angleDiff(Math.atan2(my, mx) + Math.PI / 2, eagle.heading || 0) * Math.min(1, dt * 10);
     }
   }
 
@@ -649,6 +687,7 @@ button { touch-action: manipulation; }
   // From round 9 a shimmering river-mist bubble sits on the bank between the trout and the river.
   // Flopping into it hides the trout from the eagle and the heron for INVIS_TIME seconds.
   const INVIS_FROM = 9, INVIS_TIME = 6;
+  const BUBBLE_R = 36, BUBBLE_GRAB = BUBBLE_R + 10; // drawn radius; trout picks it up within BUBBLE_GRAB
   let invisible = 0;
   const powerup = { active: false, x: 0, y: 0 };
   function updatePowerup(dt) {
@@ -656,7 +695,7 @@ button { touch-action: manipulation; }
       invisible = Math.max(0, invisible - dt);
       if (invisible === 0) { announce('Visible again.'); tone(520, 0.2, 'triangle', 0.06, 0.6); }
     }
-    if (powerup.active && fish.z < 30 && Math.hypot(fish.x - powerup.x, fish.y - powerup.y) < 28) {
+    if (powerup.active && fish.z < 30 && Math.hypot(fish.x - powerup.x, fish.y - powerup.y) < BUBBLE_GRAB) {
       powerup.active = false; invisible = INVIS_TIME;
       burst(powerup.x, powerup.y, 24, '#e6f4ff', 180);
       [660, 880, 1175].forEach((f, i) => setTimeout(() => tone(f, 0.18, 'sine', 0.08), i * 70));
@@ -1194,22 +1233,22 @@ button { touch-action: manipulation; }
   // Invisibility bubble: a bobbing, shimmering ball of river mist with sparkles circling it.
   function drawPowerup() {
     if (!powerup.active) return;
-    const r = 18, x = powerup.x, y = powerup.y + (reduced ? 0 : Math.sin(clock * 3) * 3);
+    const r = BUBBLE_R, x = powerup.x, y = powerup.y + (reduced ? 0 : Math.sin(clock * 3) * 4);
     ctx.fillStyle = 'rgba(25,35,15,0.2)';
-    ctx.beginPath(); ctx.ellipse(powerup.x + 3, powerup.y + 12, 16, 6, 0, 0, Math.PI * 2); ctx.fill();
-    const g = ctx.createRadialGradient(x - 6, y - 7, 2, x, y, r);
+    ctx.beginPath(); ctx.ellipse(powerup.x + 6, powerup.y + 24, 32, 12, 0, 0, Math.PI * 2); ctx.fill();
+    const g = ctx.createRadialGradient(x - 12, y - 14, 4, x, y, r);
     g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(0.45, 'rgba(190,225,240,0.6)'); g.addColorStop(1, 'rgba(150,200,230,0.2)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
     const a = reduced ? 0 : clock * 2;
     ctx.strokeStyle = 'rgba(255,255,255,0.65)';
     ctx.beginPath(); ctx.arc(x, y, r * 0.55, a, a + 2.2); ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, r * 0.3, a + 3, a + 4.8); ctx.stroke();
     for (let i = 0; i < 3 && !reduced; i++) {
-      const t = (clock * 0.8 + i / 3) % 1, ang = i * 2.1 + clock, d = r + 4 + t * 8;
+      const t = (clock * 0.8 + i / 3) % 1, ang = i * 2.1 + clock, d = r + 8 + t * 16;
       ctx.fillStyle = 'rgba(255,255,255,' + (1 - t) + ')';
-      ctx.beginPath(); ctx.arc(x + Math.cos(ang) * d, y + Math.sin(ang) * d, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + Math.cos(ang) * d, y + Math.sin(ang) * d, 2.6, 0, Math.PI * 2); ctx.fill();
     }
   }
 
@@ -1227,6 +1266,7 @@ button { touch-action: manipulation; }
       ctx.strokeStyle = 'rgba(200,65,47,' + (0.4 + 0.5 * k) + ')'; ctx.lineWidth = 3;
       ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.arc(0, 0, EAGLE.radius, 0, 7); ctx.stroke(); ctx.setLineDash([]);
     }
+    ctx.rotate(eagle.heading || 0);
     ctx.scale(sc, sc);
     ctx.fillStyle = 'rgba(15,22,12,' + (0.28 + k * 0.25) + ')';
     // wingspan silhouette, head toward the top

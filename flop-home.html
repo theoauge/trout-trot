@@ -89,10 +89,8 @@ button { touch-action: manipulation; }
 .card h1 { font-size: 46px; }
 .card h1 span { color: var(--trout); }
 .card h2 { font-size: 34px; }
-.place { font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--leaf); }
 .card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 32ch; }
-/* Start card: controls as two tiles, a one-line note, then what later rounds bring. */
-.card .lede { color: var(--ink); font-size: 16px; line-height: 1.4; }
+/* Start card: title, the two controls as tiles, and the start button. Nothing else. */
 .controls { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .control {
   display: grid; gap: 2px; align-content: start; min-width: 0; text-align: left;
@@ -100,14 +98,7 @@ button { touch-action: manipulation; }
 }
 .control b { font-family: var(--display); font-weight: 600; font-size: 19px; line-height: 1.1; color: var(--river); }
 .control span { font-size: 13px; line-height: 1.35; color: var(--muted); }
-.card .note { font-size: 13px; line-height: 1.45; }
-.later { width: 100%; display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); text-align: left; }
-.schedule { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.schedule li { display: grid; grid-template-columns: 4.7em 1fr; gap: 8px; align-items: baseline; font-size: 14px; line-height: 1.35; }
-.schedule .when { font-family: var(--display); font-weight: 600; color: var(--trout); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.result { display: flex; gap: 28px; justify-content: center; }
-.result .stat { justify-items: center; }
-.newbest { color: var(--leaf); font-weight: 800; font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
+.card .over-round { font-family: var(--display); font-weight: 600; font-size: 22px; color: var(--ink); }
 .play {
   margin-top: 4px; min-width: 180px; padding: 13px 28px; border: 0; border-radius: 999px;
   background: var(--trout); color: #3a0d16; font: 700 22px var(--display); cursor: pointer;
@@ -121,11 +112,11 @@ button { touch-action: manipulation; }
 
 <div class="hud" id="hud" hidden>
   <div class="stat">
-    <span class="label">Score</span>
-    <span class="value" id="score">0</span>
+    <span class="label">Round</span>
+    <span class="value" id="roundValue">1</span>
   </div>
   <div class="meter" id="meter">
-    <div class="row"><span class="label">Moisture</span><span class="label power" id="powerLabel" hidden>Invisible</span><span class="label" id="levelLabel">Round 1</span></div>
+    <div class="row"><span class="label">Moisture</span><span class="label power" id="powerLabel" hidden>Invisible</span></div>
     <div class="bar"><div class="fill" id="fill"></div></div>
   </div>
   <button class="icon-btn" id="pauseBtn" aria-label="Pause">II</button>
@@ -133,21 +124,10 @@ button { touch-action: manipulation; }
 
 <div class="overlay" id="startScreen" role="dialog" aria-modal="true" aria-labelledby="startTitle">
   <div class="card">
-    <span class="place">Upper Iowa River · Decorah</span>
     <h1 id="startTitle">Trout <span>Trot</span></h1>
-    <p class="lede">Flop the stranded trout back into the river before it dries out.</p>
     <div class="controls">
       <div class="control"><b>Swipe</b><span>to flop. A longer swipe flops farther.</span></div>
       <div class="control"><b>Tap</b><span>beside the trout for a short hop.</span></div>
-    </div>
-    <p class="note">Cold springs refill moisture. Each splash scores 1 point, and the river moves farther away every round.</p>
-    <div class="later">
-      <span class="label">Later rounds</span>
-      <ul class="schedule">
-        <li><span class="when">Round <span data-rule="heronFrom">5</span></span><span>A great blue heron guards the bank. Flop out of its ring when it rears back.</span></li>
-        <li><span class="when">Round <span data-rule="invisFrom">9</span></span><span>Grab the shimmering bubble to turn invisible for <span data-rule="invisTime">6</span> seconds.</span></li>
-        <li><span class="when">Round <span data-rule="eagleFrom">10</span></span><span>A bald eagle circles, then dives. Dodge its shadow.</span></li>
-      </ul>
     </div>
     <button class="play" id="startBtn">Flop!</button>
   </div>
@@ -163,11 +143,7 @@ button { touch-action: manipulation; }
 <div class="overlay" id="overScreen" role="dialog" aria-modal="true" aria-labelledby="overTitle" hidden>
   <div class="card">
     <h2 id="overTitle">Dried out</h2>
-    <div class="result">
-      <div class="stat"><span class="label">Score</span><span class="value" id="finalScore">0</span></div>
-      <div class="stat"><span class="label">Best</span><span class="value" id="finalBest">0</span></div>
-    </div>
-    <span class="newbest" id="newBest" hidden>New best</span>
+    <p class="over-round" id="overRound">Round 1</p>
     <button class="play" id="againBtn">Try again</button>
   </div>
 </div>
@@ -178,9 +154,9 @@ button { touch-action: manipulation; }
   const ctx = cv.getContext('2d');
   const $ = id => document.getElementById(id);
   const ui = {
-    hud: $('hud'), score: $('score'), fill: $('fill'), meter: $('meter'), levelLabel: $('levelLabel'), power: $('powerLabel'),
+    hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
     start: $('startScreen'), pause: $('pauseScreen'), over: $('overScreen'), overTitle: $('overTitle'),
-    finalScore: $('finalScore'), finalBest: $('finalBest'), newBest: $('newBest')
+    overRound: $('overRound')
   };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Screen reader announcements. Clearing first makes a repeated message (another +1) read again.
@@ -198,18 +174,40 @@ button { touch-action: manipulation; }
   let W = 0, H = 0, view = { s: 1, oy: 0, w: VIEW_W };
 
   let mode = 'title'; // title | play | paused | saved | dying | over
-  let level = 1, score = 0, moisture = 100, stateTimer = 0, bannerTimer = 0, hintOn = true, clock = 0, deathBy = 'dry';
-  let best = 0;
-  try { best = parseInt(localStorage.getItem('flop-home-trout-best') || '0', 10) || 0; } catch (e) {}
+  let level = 1, moisture = 100, stateTimer = 0, bannerTimer = 0, seasonTimer = 0, hintOn = true, clock = 0, deathBy = 'dry';
+  // Rounds keep getting harder up to MAX_ROUND, then stay at that difficulty.
+  const MAX_ROUND = 100;
+  const SEASON_TIME = 2.4; // seconds the "Autumn" title shows before the round banner
+
+  // Progress: the round the player is on is saved on the device each time they clear a round,
+  // and play always starts from it. There is no score.
+  const SAVE_KEY = 'trout-trot-round';
+  let savedRound = 1;
+  try {
+    savedRound = Math.max(1, parseInt(localStorage.getItem(SAVE_KEY) || '1', 10) || 1);
+    localStorage.removeItem('flop-home-trout-best'); // the old best-score save, no longer used
+  } catch (e) {}
+  function saveRound(n) {
+    savedRound = n;
+    try { localStorage.setItem(SAVE_KEY, String(n)); } catch (e) {}
+  }
 
   const fish = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, angle: Math.PI, cooldown: 0, alpha: 1, lift: 0 };
   let flip = false, river = { base: 185, amp: 0, phase: 0, far: 60 };
-  let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [], popup = null;
+  let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [];
   let anglers = [], talus = [], cedars = [], ripples = [], place = '';
   const canoe = { active: false, t: 4, x: 0, y: 0, vy: 0, off: 0, color: '#2f6b4f' };
   const eagle = { phase: 'off', t: 0, x: 0, y: 0, vx: 0, vy: 0 };
 
   const rnd = (a, b) => a + Math.random() * (b - a);
+  // Fisher–Yates: every order equally likely.
+  function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
   const shoreAt = y => river.base + river.amp * Math.sin(y * 0.011 + river.phase);
   const farAt = y => river.far + 8 * Math.sin(y * 0.017 + river.phase * 1.7);
   const PLACES = ['Trout Run', "Dunning's Spring", 'Twin Springs', 'Phelps Park', 'Palisades Park', 'Ice Cave', 'Malanaphy Springs', 'Siewers Spring', 'Will Baker Park', 'Pulpit Rock'];
@@ -221,8 +219,8 @@ button { touch-action: manipulation; }
   // ---------- level ----------
   function makeLevel(n) {
     flip = n > 1 && Math.random() < 0.5;
-    // Each round the trout lands about 160 units (roughly 4 ft) farther from the river.
-    WW = Math.min(600 + (n - 1) * 160, 2200); TREES = WW - 52;
+    // Each round the trout lands 40 units (about 1 ft) farther from the river, up to MAX_ROUND.
+    WW = 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52;
     river = { base: rnd(178, 192), amp: Math.min(n * 8, 45), phase: rnd(0, 6), far: 60 };
     place = PLACES[(n - 1) % PLACES.length];
     fish.x = rnd(WW - 130, TREES - 45); fish.y = rnd(260, WH - 170);
@@ -242,26 +240,41 @@ button { touch-action: manipulation; }
       const r = rnd(20, 32), y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 40, TREES - r - 10);
       if (clearOf(x, y, r)) { boulders.push({ x, y, r, seed: Math.random() * 6 }); i++; }
     }
+    const randomLog = () => {
+      const h = rnd(90, 140), y = rnd(TOP, BOTTOM - h);
+      return { x: rnd(shoreAt(y + h / 2) + 50, TREES - 60), y, w: 18, h };
+    };
+    const logClear = l => clearOf(l.x + l.w / 2, l.y + l.h / 2, l.h / 2);
     const nl = n < 2 ? 0 : Math.min(Math.floor(n / 2) + Math.floor((WW - 600) / 600), 6);
     for (let i = 0, tries = 0; i < nl && tries < 200; tries++) {
-      const h = rnd(90, 140), y = rnd(TOP, BOTTOM - h), x = rnd(shoreAt(y + h / 2) + 50, TREES - 60);
-      if (clearOf(x + 9, y + h / 2, h / 2)) { logs.push({ x, y, w: 18, h }); i++; }
+      const l = randomLog();
+      if (logClear(l)) { logs.push(l); i++; }
     }
+    // Herons: one per log, only on logs whose walkway stays well out of reach of where the trout
+    // starts. Extra logs are added if there aren't enough suitable ones.
+    herons = []; heronCatcher = null;
+    const wantHerons = heronCount(n);
+    const heronSafe = l => distToLog(l, fish.x, fish.y) > HERON.reach + 60;
+    for (let tries = 0; logs.filter(heronSafe).length < wantHerons && tries < 400; tries++) {
+      const l = randomLog();
+      if (heronSafe(l) && logClear(l)) logs.push(l);
+    }
+    herons = shuffle(logs.filter(heronSafe)).slice(0, wantHerons).map(makeHeron);
     // More springs on wider banks, since the trip takes longer.
     const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
     for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
       const r = 52, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
       if (clearOf(x, y, r)) { springs.push({ x, y, r, water: 35 }); i++; }
     }
-    // Invisibility bubble, somewhere between the trout and the river, and always out of the
-    // heron's reach: it wades 24 units in from the shore and reaches HERON.reach further.
+    // Invisibility bubble, somewhere between the trout and the river, and always out of every
+    // heron's reach, even for a trout touching the edge of the bubble's pickup range.
     powerup.active = false; invisible = 0;
     if (n >= INVIS_FROM) {
-      for (let tries = 0; tries < 200; tries++) {
-        // Far enough that a trout touching the bubble's pickup range is still out of reach.
-        const y = rnd(TOP + 50, BOTTOM - 50), lo = shoreAt(y) + 24 + HERON.reach + BUBBLE_GRAB + 10;
+      for (let tries = 0; tries < 300; tries++) {
+        const y = rnd(TOP + 50, BOTTOM - 50), lo = shoreAt(y) + 60;
         const x = rnd(lo, Math.max(lo + 10, fish.x - 160));
-        if (clearOf(x, y, BUBBLE_R + 8)) { powerup.active = true; powerup.x = x; powerup.y = y; break; }
+        const outOfReach = herons.every(h => distToLog(h.log, x, y) > HERON.reach + BUBBLE_GRAB + 10);
+        if (outOfReach && clearOf(x, y, BUBBLE_R + 8)) { powerup.active = true; powerup.x = x; powerup.y = y; break; }
       }
     }
 
@@ -296,10 +309,10 @@ button { touch-action: manipulation; }
 
     eagle.phase = n >= EAGLE_FROM ? 'idle' : 'off';
     eagle.t = rnd(2.5, 4);
-    placeHeron(n);
     moisture = 100; bannerTimer = 1.6;
+    seasonTimer = n === 1 ? SEASON_TIME : 0; // the very first round opens with "Autumn"
     cam = camTarget();
-    ui.levelLabel.textContent = 'Round ' + n;
+    ui.round.textContent = n;
   }
 
   // ---------- sizing ----------
@@ -364,14 +377,18 @@ button { touch-action: manipulation; }
   }
 
   // ---------- flow ----------
+  // Start (or retry) from the saved round.
+  let layoutReady = false;
   function startGame() {
     ensureAudio();
-    level = 1; score = 0; hintOn = true; popup = null;
-    makeLevel(level);
+    level = savedRound; hintOn = true;
+    // The first start plays the bank already built behind the start card; retries build a new one.
+    if (!layoutReady) makeLevel(level);
+    layoutReady = false;
     mode = 'play';
     ui.start.hidden = ui.over.hidden = ui.pause.hidden = true; ui.hud.hidden = false;
     updateHud();
-    announce('Round 1, ' + place + '. Swipe toward the river.');
+    announce((level === 1 ? 'Autumn. ' : '') + 'Round ' + level + ', ' + place + '.' + (level === 1 ? ' Swipe toward the river.' : ''));
   }
   // Pause works mid-round and during the splash and dying animations; resume returns to that state.
   let pausedFrom = 'play';
@@ -383,14 +400,13 @@ button { touch-action: manipulation; }
   function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
   function reachRiver() {
     mode = 'saved'; stateTimer = 1.4;
-    score += 1;
+    saveRound(level + 1);
     eagle.phase = 'off';
     burst(fish.x, fish.y, 30, '#d6f1ee', 260);
     ripples.push({ x: fish.x, y: fish.y, age: 0 });
     splashSound();
-    popup = { text: '+1', x: fish.x, y: fish.y - 30, life: 1.3 };
     updateHud();
-    announce('Splash! Score ' + score + '.');
+    announce('Splash!');
   }
   function lose(reason) {
     mode = 'dying'; stateTimer = 1.4; deathBy = reason;
@@ -400,28 +416,22 @@ button { touch-action: manipulation; }
   }
   function showOver() {
     mode = 'over';
-    const isBest = score > best;
-    if (isBest) { best = score; try { localStorage.setItem('flop-home-trout-best', String(best)); } catch (e) {} }
     ui.overTitle.textContent = { eagle: 'Snatched by an eagle', heron: 'Speared by a heron' }[deathBy] || 'Dried out';
-    ui.finalScore.textContent = score; ui.finalBest.textContent = best;
-    ui.newBest.hidden = !isBest || score === 0;
+    ui.overRound.textContent = 'Round ' + level;
     ui.hud.hidden = true; ui.over.hidden = false;
     $('againBtn').focus();
-    announce(ui.overTitle.textContent + '. Score ' + score + ', best ' + best + '.');
+    announce(ui.overTitle.textContent + '. Round ' + level + '.');
   }
   function updateHud() {
-    ui.score.textContent = score;
     ui.fill.style.width = Math.max(0, moisture) + '%';
     const low = moisture < 25;
     if (low && mode === 'play' && !ui.meter.classList.contains('low')) announce('Moisture low.');
     ui.meter.classList.toggle('low', low);
-    // While invisible, the countdown takes the round label's place (two labels always fit on a
-    // phone; three don't). Only touched when the whole-second count changes.
+    // Invisibility countdown beside the moisture label. Only touched when the whole-second count changes.
     const secs = Math.ceil(invisible);
     if (secs !== shownPowerSecs) {
       shownPowerSecs = secs;
       ui.power.hidden = secs <= 0;
-      ui.levelLabel.hidden = secs > 0;
       if (secs > 0) ui.power.textContent = 'Invisible ' + secs + 's';
     }
   }
@@ -534,13 +544,16 @@ button { touch-action: manipulation; }
     if (fish.y > BOTTOM) { fish.y = BOTTOM; bounce(0, -1, 0.4); }
   }
 
-  // The eagle arrives in round 10 and has the same skill every round after that: fast, quick
-  // to lock on, leading the trout's landing spot and homing during the strike. EAGLE_SKILL = 6
-  // matches what the old ramping eagle reached by round 9; lower it to make the eagle easier.
-  const EAGLE_FROM = 10, EAGLE_SKILL = 6;
+  // The eagle arrives in round 5: fast, quick to lock on, leading the trout's landing spot and
+  // homing during the strike. EAGLE_SKILL = 6 is what the old ramping eagle reached by round 9;
+  // lower it to make the eagle easier.
+  const EAGLE_FROM = 5, EAGLE_SKILL = 6;
+  // From round 10 it flies, circles and dives 5% faster every 10 rounds, compounding, up to
+  // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. Its warning time
+  // and strike size don't change.
+  const eagleSpeedUp = () => Math.pow(1.05, Math.max(0, Math.floor((Math.min(level, MAX_ROUND) - 10) / 10) + 1));
   const EAGLE = (k => ({
     speed: 260 + k * 45,
-    track: Math.max(0.8, 2 - k * 0.2),
     lock: Math.max(0.3, 0.8 - k * 0.07),
     radius: Math.min(62, 38 + k * 4),
     lead: Math.min(1, 0.35 + k * 0.15),
@@ -574,7 +587,7 @@ button { touch-action: manipulation; }
   function updateEagle(dt) {
     if (eagle.phase === 'off') return;
     eagle.t -= dt;
-    const sk = EAGLE;
+    const sk = EAGLE, fast = eagleSpeedUp();
     // When the eagle can't see the trout it flies off, and doesn't return until it can.
     if (!visibleTrout()) {
       if (eagle.phase === 'track' || eagle.phase === 'circle' || eagle.phase === 'lock') eagleLeave();
@@ -582,12 +595,15 @@ button { touch-action: manipulation; }
     }
     const px = eagle.x, py = eagle.y;
     if (eagle.phase === 'idle' && eagle.t <= 0) {
-      eagle.phase = 'track'; eagle.t = sk.track;
+      eagle.phase = 'track';
       eagle.x = fish.x + rnd(-200, 200); eagle.y = fish.y < WH / 2 ? WH + 80 : -80;
     } else if (eagle.phase === 'track') {
-      // Fly in until it's close enough to start circling.
-      const d = moveEagle(fish, sk.speed, dt);
-      if (eagle.t <= 0 && d < EAGLE_CIRCLE.from) {
+      // Close in only as far as the circling distance, then start circling from there, so the
+      // shadow never passes over the trout before the dive.
+      const dx = fish.x - eagle.x, dy = fish.y - eagle.y, d = Math.hypot(dx, dy) || 1;
+      const step = Math.min(sk.speed * fast * dt, Math.max(0, d - EAGLE_CIRCLE.from));
+      eagle.x += dx / d * step; eagle.y += dy / d * step;
+      if (d - step <= EAGLE_CIRCLE.from + 1) {
         eagle.phase = 'circle'; eagle.t = EAGLE_CIRCLE.time;
         eagle.ang = Math.atan2(eagle.y - fish.y, eagle.x - fish.x);
         eagle.dir = Math.random() < 0.5 ? -1 : 1;
@@ -596,13 +612,13 @@ button { touch-action: manipulation; }
       // Circle the trout, spiralling in from EAGLE_CIRCLE.from to .to, then dive.
       const k = 1 - Math.max(0, eagle.t) / EAGLE_CIRCLE.time;
       const r = EAGLE_CIRCLE.from + (EAGLE_CIRCLE.to - EAGLE_CIRCLE.from) * k;
-      eagle.ang += eagle.dir * EAGLE_CIRCLE.spin * dt;
+      eagle.ang += eagle.dir * EAGLE_CIRCLE.spin * fast * dt;
       const tx = fish.x + Math.cos(eagle.ang) * r, ty = fish.y + Math.sin(eagle.ang) * r;
       eagle.x += (tx - eagle.x) * Math.min(1, dt * 8);
       eagle.y += (ty - eagle.y) * Math.min(1, dt * 8);
       if (eagle.t <= 0) { eagle.phase = 'lock'; eagle.t = eagle.lockDur = sk.lock; tone(1200, 0.25, 'square', 0.04, 0.8); announce('Eagle diving!'); }
     } else if (eagle.phase === 'lock') {
-      moveEagle(eagleAim(sk), sk.speed * sk.home, dt);
+      moveEagle(eagleAim(sk), sk.speed * sk.home * fast, dt);
       if (eagle.t <= 0) {
         if (Math.hypot(fish.x - eagle.x, fish.y - eagle.y) < sk.radius && fish.z < sk.reachZ) { eagle.phase = 'carry'; lose('eagle'); return; }
         eagleLeave();
@@ -618,70 +634,71 @@ button { touch-action: manipulation; }
     }
   }
 
-  // ---------- heron ----------
-  // A great blue heron wades the water's edge from round 5, edging along the bank to keep level
-  // with the trout. When the trout comes within reach it draws its neck back (the warning), then
-  // spears the spot it aimed at. It has the same skill every round.
-  const HERON = { from: 5, speed: 45, reach: 80, hit: 26, cock: 0.45, strike: 0.16, recover: 1.1, rest: 18 };
-  const heron = { active: false, x: 0, y: 0, angle: 0, state: 'wade', t: 0, tx: 0, ty: 0, neck: HERON.rest };
+  // ---------- herons ----------
+  // Great blue herons stand on fallen logs, one heron per log: none before round 10, then one
+  // more every 10 rounds (1 in rounds 10–19, 2 in 20–29, … 10 at round 100). Each heron walks
+  // along its log to keep level with the trout. When the trout comes within reach it draws its
+  // neck back (the warning), then spears the spot it aimed at. Herons have the same skill every round.
+  const HERON = { speed: 45, reach: 80, hit: 26, cock: 0.45, strike: 0.16, recover: 1.1, rest: 18 };
+  const heronCount = n => (n < 10 ? 0 : Math.floor(Math.min(n, MAX_ROUND) / 10));
+  let herons = [], heronCatcher = null;
   const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
-  function placeHeron(n) {
-    heron.active = n >= HERON.from;
-    if (!heron.active) return;
-    // Start well away from the trout's level, so the first stretch of bank is open.
-    heron.y = fish.y > WH / 2 ? rnd(TOP + 60, WH / 2 - 120) : rnd(WH / 2 + 120, BOTTOM - 60);
-    heron.x = shoreAt(heron.y) + 24;
-    heron.angle = 0; heron.state = 'wade'; heron.t = 0; heron.neck = HERON.rest;
+  const makeHeron = log => ({ log, x: log.x + log.w / 2, y: log.y + log.h / 2, angle: 0, state: 'wade', t: 0, tx: 0, ty: 0, neck: HERON.rest });
+  // The stretch of a log a heron can walk along, and how close a point comes to that stretch.
+  const logWalk = l => [l.y + 12, l.y + l.h - 12];
+  function distToLog(l, x, y) {
+    const [a, b] = logWalk(l);
+    return Math.hypot(x - (l.x + l.w / 2), y - Math.max(a, Math.min(b, y)));
   }
-  function updateHeron(dt) {
-    if (!heron.active) return;
+  function updateHeron(h, dt) {
     if (mode !== 'play') {
       // Round over (splash, or caught by something else): stand down instead of freezing mid-strike.
-      // When the heron made the catch, the dying animation holds its neck out instead.
-      if (!(mode === 'dying' && deathBy === 'heron')) {
-        heron.state = 'wade';
-        heron.neck += (HERON.rest - heron.neck) * Math.min(1, dt * 4);
+      // The heron that made a catch holds its neck out through the dying animation instead.
+      if (!(mode === 'dying' && deathBy === 'heron' && h === heronCatcher)) {
+        h.state = 'wade';
+        h.neck += (HERON.rest - h.neck) * Math.min(1, dt * 4);
       }
       return;
     }
     const prey = visibleTrout();
-    if (heron.state === 'wade') {
-      // Wade to stay level with the trout; with no trout in sight, stand still.
+    if (h.state === 'wade') {
+      // Walk along the log to stay level with the trout; with no trout in sight, stand still.
       if (prey) {
-        const step = Math.max(-HERON.speed * dt, Math.min(HERON.speed * dt, prey.y - heron.y));
-        heron.y = Math.max(TOP, Math.min(BOTTOM, heron.y + step));
-        heron.x = shoreAt(heron.y) + 24;
+        const [a, b] = logWalk(h.log);
+        const step = Math.max(-HERON.speed * dt, Math.min(HERON.speed * dt, prey.y - h.y));
+        h.y = Math.max(a, Math.min(b, h.y + step));
       }
-      const d = prey ? Math.hypot(prey.x - heron.x, prey.y - heron.y) : Infinity;
-      const want = d < 220 ? Math.atan2(prey.y - heron.y, prey.x - heron.x) : 0;
-      heron.angle += angleDiff(want, heron.angle) * Math.min(1, dt * 4);
-      heron.neck += (HERON.rest - heron.neck) * Math.min(1, dt * 6);
+      const d = prey ? Math.hypot(prey.x - h.x, prey.y - h.y) : Infinity;
+      const want = d < 220 ? Math.atan2(prey.y - h.y, prey.x - h.x) : 0;
+      h.angle += angleDiff(want, h.angle) * Math.min(1, dt * 4);
+      h.neck += (HERON.rest - h.neck) * Math.min(1, dt * 6);
       if (d < HERON.reach && prey.z < 20) {
-        heron.state = 'cock'; heron.t = HERON.cock;
-        heron.tx = prey.x; heron.ty = prey.y; heron.angle = want;
+        h.state = 'cock'; h.t = HERON.cock;
+        h.tx = prey.x; h.ty = prey.y; h.angle = want;
         tone(170, 0.3, 'sawtooth', 0.06, 0.7);
         announce('Heron striking!');
       }
-    } else if (heron.state === 'cock') {
-      heron.t -= dt;
-      heron.neck += (6 - heron.neck) * Math.min(1, dt * 14);
-      if (heron.t <= 0) {
-        heron.state = 'strike'; heron.t = HERON.strike;
+    } else if (h.state === 'cock') {
+      h.t -= dt;
+      h.neck += (6 - h.neck) * Math.min(1, dt * 14);
+      if (h.t <= 0) {
+        h.state = 'strike'; h.t = HERON.strike;
         tone(950, 0.08, 'square', 0.05, 0.5);
-        if (prey && Math.hypot(prey.x - heron.tx, prey.y - heron.ty) < HERON.hit && prey.z < 25) lose('heron');
+        if (prey && Math.hypot(prey.x - h.tx, prey.y - h.ty) < HERON.hit && prey.z < 25) { heronCatcher = h; lose('heron'); }
       }
-    } else if (heron.state === 'strike') {
-      heron.t -= dt;
-      heron.neck += (heronStrikeNeck() - heron.neck) * Math.min(1, dt * 30);
-      if (heron.t <= 0) { heron.state = 'recover'; heron.t = HERON.recover; }
-    } else if (heron.state === 'recover') {
-      heron.t -= dt;
-      heron.neck += (HERON.rest - heron.neck) * Math.min(1, dt * 4);
-      if (heron.t <= 0) heron.state = 'wade';
+    } else if (h.state === 'strike') {
+      h.t -= dt;
+      h.neck += (heronStrikeNeck(h) - h.neck) * Math.min(1, dt * 30);
+      if (h.t <= 0) { h.state = 'recover'; h.t = HERON.recover; }
+    } else if (h.state === 'recover') {
+      h.t -= dt;
+      h.neck += (HERON.rest - h.neck) * Math.min(1, dt * 4);
+      if (h.t <= 0) h.state = 'wade';
     }
   }
+  const updateHerons = dt => { for (const h of herons) updateHeron(h, dt); };
   // Neck length that puts the bill tip (44 units past the neck) on the spot it aimed at.
-  const heronStrikeNeck = () => Math.max(6, Math.hypot(heron.tx - heron.x, heron.ty - heron.y) - 44);
+  const heronStrikeNeck = h => Math.max(6, Math.hypot(h.tx - h.x, h.ty - h.y) - 44);
 
   // ---------- invisibility power-up ----------
   // From round 9 a shimmering river-mist bubble sits on the bank between the trout and the river.
@@ -719,10 +736,13 @@ button { touch-action: manipulation; }
 
   function update(dt) {
     clock += dt;
-    if (bannerTimer > 0) bannerTimer -= dt;
+    // Banners only count down in play, so a bank built behind the start card still shows them.
+    if (mode === 'play') {
+      if (seasonTimer > 0) seasonTimer -= dt;
+      else if (bannerTimer > 0) bannerTimer -= dt;
+    }
     updateCanoe(dt);
     cam += (camTarget() - cam) * Math.min(1, dt * 5);
-    if (popup) { popup.life -= dt; popup.y -= 30 * dt; if (popup.life <= 0) popup = null; }
 
     if (mode === 'play') {
       fish.cooldown -= dt;
@@ -752,7 +772,7 @@ button { touch-action: manipulation; }
       }
       updatePowerup(dt);
       updateEagle(dt);
-      updateHeron(dt);
+      updateHerons(dt);
       if (mode === 'play') {
         if (inRiver()) reachRiver();
         else if (moisture <= 0) lose('dry');
@@ -764,20 +784,21 @@ button { touch-action: manipulation; }
       fish.z = Math.max(0, fish.z - 300 * dt);
       fish.x += (target - fish.x) * Math.min(1, dt * 2);
       fish.y += 160 * dt;
-      updateHeron(dt);
+      updateHerons(dt);
       fish.angle += (Math.PI / 2 - fish.angle) * Math.min(1, dt * 4);
       fish.alpha = Math.max(0, stateTimer / 1.4);
       stateTimer -= dt;
       if (stateTimer <= 0) { level++; makeLevel(level); mode = 'play'; updateHud(); announce('Round ' + level + ', ' + place + '.'); }
     } else if (mode === 'dying') {
-      updateHeron(dt);
+      updateHerons(dt);
       if (deathBy === 'eagle') { fish.lift += dt * 1.5; eagle.y -= 260 * dt; fish.y -= 260 * dt; }
-      if (deathBy === 'heron') {
+      if (deathBy === 'heron' && heronCatcher) {
         // Held up in the heron's bill.
-        heron.neck = heronStrikeNeck();
-        const reach = 44 + heron.neck;
-        fish.x += (heron.x + Math.cos(heron.angle) * reach - fish.x) * Math.min(1, dt * 10);
-        fish.y += (heron.y + Math.sin(heron.angle) * reach - fish.y) * Math.min(1, dt * 10);
+        const h = heronCatcher;
+        h.neck = heronStrikeNeck(h);
+        const reach = 44 + h.neck;
+        fish.x += (h.x + Math.cos(h.angle) * reach - fish.x) * Math.min(1, dt * 10);
+        fish.y += (h.y + Math.sin(h.angle) * reach - fish.y) * Math.min(1, dt * 10);
         fish.lift = Math.min(0.3, fish.lift + dt);
       }
       stateTimer -= dt;
@@ -803,6 +824,7 @@ button { touch-action: manipulation; }
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
     for (let y = -200; y < WH + 200; y += 60) ctx.fillRect(-2000, y, WW + 4000, 30);
     for (const l of leaves) {
+      if (l.x < cam - 20 || l.x > cam + view.w + 20) continue; // only the leaves on screen
       ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
       ctx.fillStyle = l.c; ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
       ctx.restore();
@@ -1189,12 +1211,11 @@ button { touch-action: manipulation; }
   // Great blue heron from above: grey-blue body and folded wings, pale neck, white head with a
   // black crest plume, and a long yellow bill. A dashed ring shows its reach as the trout nears;
   // it turns red, with a small ring on the aimed spot, while the heron is about to strike.
-  function drawHeron() {
-    if (!heron.active) return;
-    const near = Math.hypot(fish.x - heron.x, fish.y - heron.y);
-    const cocked = heron.state === 'cock' && mode === 'play';
+  function drawHeron(h) {
+    const near = Math.hypot(fish.x - h.x, fish.y - h.y);
+    const cocked = h.state === 'cock' && mode === 'play';
     ctx.save();
-    ctx.translate(heron.x, heron.y);
+    ctx.translate(h.x, h.y);
     if (mode === 'play' && visibleTrout() && (cocked || near < HERON.reach + 90)) {
       const k = cocked ? 1 : Math.min(1, 1 - (near - HERON.reach) / 90);
       ctx.strokeStyle = cocked ? 'rgba(200,65,47,0.85)' : 'rgba(250,249,243,' + 0.55 * k + ')';
@@ -1203,9 +1224,9 @@ button { touch-action: manipulation; }
       ctx.setLineDash([]);
     }
     ctx.fillStyle = 'rgba(25,35,15,0.25)';
-    ctx.beginPath(); ctx.ellipse(7, 9, 26, 14, heron.angle, 0, Math.PI * 2); ctx.fill();
-    ctx.rotate(heron.angle);
-    const hx = 14 + heron.neck;
+    ctx.beginPath(); ctx.ellipse(7, 9, 26, 14, h.angle, 0, Math.PI * 2); ctx.fill();
+    ctx.rotate(h.angle);
+    const hx = 14 + h.neck;
     ctx.fillStyle = '#5d6e82';
     ctx.beginPath(); ctx.moveTo(-24, 0); ctx.lineTo(-37, -6); ctx.lineTo(-37, 6); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#7f91a5';
@@ -1214,7 +1235,7 @@ button { touch-action: manipulation; }
     ctx.beginPath(); ctx.ellipse(-8, -6, 19, 7, -0.12, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.ellipse(-8, 6, 19, 7, 0.12, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = '#a9b6c4'; ctx.lineWidth = 6; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(14, 0); ctx.quadraticCurveTo(14 + heron.neck * 0.5, cocked ? 7 : 3, hx, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(14, 0); ctx.quadraticCurveTo(14 + h.neck * 0.5, cocked ? 7 : 3, hx, 0); ctx.stroke();
     ctx.fillStyle = '#e2a43a';
     ctx.beginPath(); ctx.moveTo(hx + 4, -2.6); ctx.lineTo(hx + 30, 0); ctx.lineTo(hx + 4, 2.6); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#f1f3f5';
@@ -1226,7 +1247,7 @@ button { touch-action: manipulation; }
     ctx.restore();
     if (cocked) {
       ctx.strokeStyle = 'rgba(200,65,47,0.9)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(heron.tx, heron.ty, HERON.hit, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(h.tx, h.ty, HERON.hit, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
@@ -1295,10 +1316,10 @@ button { touch-action: manipulation; }
     ctx.beginPath(); ctx.arc(fish.x + ux * reach, fish.y + uy * reach, 10, 0, 7); ctx.stroke();
   }
 
-  function screenText(text, x, y, size) {
+  function screenText(text, x, y, size, fill = '#faf9f3') {
     ctx.font = '700 ' + size + 'px Fredoka, "Arial Rounded MT Bold", sans-serif';
     ctx.textAlign = 'center';
-    ctx.lineWidth = Math.max(3, size / 7); ctx.strokeStyle = '#1f2b22'; ctx.fillStyle = '#faf9f3';
+    ctx.lineWidth = Math.max(3, size / 7); ctx.strokeStyle = '#1f2b22'; ctx.fillStyle = fill;
     ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
   }
 
@@ -1327,7 +1348,7 @@ button { touch-action: manipulation; }
     for (const b of boulders) drawBoulder(b);
     drawPowerup();
     if (mode !== 'title') drawFish();
-    drawHeron();
+    for (const h of herons) drawHeron(h);
     drawTrees();
     for (const p of parts) {
       ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2.5));
@@ -1356,13 +1377,12 @@ button { touch-action: manipulation; }
       ctx.fillText(label, tx + tw / 2, ty + th / 2 + 1);
       ctx.textBaseline = 'alphabetic';
     }
-    if (popup) {
-      const p = toScreen(popup.x, popup.y);
-      ctx.globalAlpha = Math.min(1, popup.life);
-      screenText(popup.text, p.x, p.y, 40 * fs);
+    if (mode === 'play' && seasonTimer > 0) {
+      // Fade in over 0.4 s, hold, fade out over the last 0.5 s, in sugar-maple orange.
+      ctx.globalAlpha = Math.max(0, Math.min(1, seasonTimer / 0.5, (SEASON_TIME - seasonTimer) / 0.4));
+      screenText('Autumn', W / 2, view.oy + 250 * view.s, 64 * fs, '#f0a03a');
       ctx.globalAlpha = 1;
-    }
-    if (mode === 'play' && bannerTimer > 0) {
+    } else if (mode === 'play' && bannerTimer > 0) {
       ctx.globalAlpha = Math.min(1, bannerTimer);
       screenText('Round ' + level, W / 2, view.oy + 240 * view.s, 44 * fs);
       screenText(place, W / 2, view.oy + 240 * view.s + 34 * fs, 22 * fs);
@@ -1384,18 +1404,15 @@ button { touch-action: manipulation; }
     if (mode !== 'paused') update(dt);
     draw(now);
   }
-  function boot(data) {
-    if (data && typeof data.best === 'number') best = Math.max(best, data.best);
-    // Start-card rules show the same numbers the game plays by.
-    const rules = { heronFrom: HERON.from, invisFrom: INVIS_FROM, invisTime: INVIS_TIME, eagleFrom: EAGLE_FROM };
-    for (const el of document.querySelectorAll('[data-rule]')) el.textContent = rules[el.dataset.rule];
+  function boot() {
     resize();
-    makeLevel(1);
+    level = savedRound;
+    makeLevel(level); // the bank behind the start card is the round they'll play
+    layoutReady = true;
     addEventListener('resize', resize);
     requestAnimationFrame(frame);
     try { $('startBtn').focus({ preventScroll: true }); } catch (e) {}
   }
-  window.claude?.hot?.snapshot?.(() => ({ best }));
-  window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});
+  boot();
 })();
 </script>

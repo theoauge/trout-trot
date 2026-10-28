@@ -32,6 +32,7 @@ edit('ios/App/App.xcodeproj/project.pbxproj', [
   [/MARKETING_VERSION = [^;]+;/g, `MARKETING_VERSION = ${version};`],
   [/CURRENT_PROJECT_VERSION = [^;]+;/g, `CURRENT_PROJECT_VERSION = ${build};`]
 ]);
-const semver = version.split('.').concat(['0', '0']).slice(0, 3).join('.');
+// npm only accepts plain numbers in a version (1.1.001 is invalid), so drop leading zeros here.
+const semver = version.split('.').concat(['0', '0']).slice(0, 3).map(part => String(Number(part))).join('.');
 edit('package.json', [[/"version": "[^"]*"/, `"version": "${semver}"`]]);
 console.log(`Trout Trot is now version ${version} (build ${build}).`);

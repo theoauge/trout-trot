@@ -53,6 +53,15 @@ button { touch-action: manipulation; }
 .label { font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .value { font-family: var(--display); font-weight: 700; font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
 .meter { display: grid; gap: 4px; min-width: 0; max-width: 260px; justify-self: center; width: 100%; }
+.end { gap: 10px; }
+.stats { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; text-align: left; font-size: 15px; color: var(--ink); }
+.stats b { font-family: var(--display); font-weight: 600; color: var(--river); text-align: right; }
+.card .stats-note, .card .credits { font-size: 12px; max-width: none; line-height: 1.4; }
+.card .credits { padding-top: 6px; border-top: 1px solid var(--line); }
+.feathers { display: flex; gap: 4px; }
+.feathers svg { width: 18px; height: 18px; stroke-width: 1.6; }
+.feathers .on { fill: #e2a93b; stroke: #6b4a14; }
+.feathers .off { fill: none; stroke: #8a8a8a; opacity: 0.6; }
 .meter .row { display: flex; justify-content: space-between; gap: 8px; }
 .meter .row .label { white-space: nowrap; }
 .label.power { color: var(--river); }
@@ -139,6 +148,7 @@ button { touch-action: manipulation; }
   <div class="meter" id="meter">
     <div class="row"><span class="label">Moisture</span><span class="label power" id="powerLabel" hidden>Invisible</span></div>
     <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="feathers" id="feathers" hidden></div>
   </div>
   <button class="icon-btn" id="pauseBtn" aria-label="Pause">II</button>
 </div>
@@ -179,6 +189,34 @@ button { touch-action: manipulation; }
   </div>
 </div>
 
+<div class="overlay" id="leaveScreen" role="dialog" aria-modal="true" aria-labelledby="leaveTitle" hidden>
+  <div class="card">
+    <h2 id="leaveTitle">Leave Trout Trot?</h2>
+    <button class="play" id="stayBtn">Stay</button>
+    <button class="text-btn" id="leaveBtn">Leave</button>
+  </div>
+</div>
+
+<div class="overlay" id="endScreen" role="dialog" aria-modal="true" aria-labelledby="endTitle" hidden>
+  <div class="card end">
+    <h2 id="endTitle">You made it home</h2>
+    <p id="endSub">The Great Eagle is beaten, and the river is yours.</p>
+    <div class="stats" id="endStats"></div>
+    <p class="stats-note" id="endNote"></p>
+    <button class="play" id="fightBtn">Fight again</button>
+    <form class="goto" id="endGoto" novalidate>
+      <label class="label" for="endGotoInput">Go to round</label>
+      <div class="goto-row">
+        <input id="endGotoInput" type="number" inputmode="numeric" min="1" step="1" aria-describedby="endGotoError">
+        <button type="submit" class="go-btn">Go</button>
+      </div>
+      <p class="goto-error" id="endGotoError" role="alert" hidden></p>
+    </form>
+    <button class="text-btn" id="endRestartBtn">Start over</button>
+    <p class="credits" id="endCredits"></p>
+  </div>
+</div>
+
 <script>
 (() => {
   const cv = document.getElementById('game');
@@ -189,7 +227,7 @@ button { touch-action: manipulation; }
   const ui = {
     hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
     start: $('startScreen'), pause: $('pauseScreen'), over: $('overScreen'), overTitle: $('overTitle'),
-    overRound: $('overRound')
+    overRound: $('overRound'), feathers: $('feathers'), end: $('endScreen'), leave: $('leaveScreen')
   };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Screen reader announcements. Clearing first makes a repeated message (another +1) read again.
@@ -214,10 +252,10 @@ button { touch-action: manipulation; }
 
   // Seasons. Rounds 1–99 are autumn, with the trees turning as the rounds go on. Rounds 100–199 are
   // winter: dead grass, bare trees and a frozen river, with snow building to round 190 and melting by 199.
-  // Rounds 200–299 are spring; rounds 300 on are summer (round 400 is just summer for now).
+  // Rounds 200–299 are spring, 300–399 summer, and round 400 is the finale, The Eagle's Nest.
   // `fall` runs from 0 to 1 across autumn; snowAt() below gives winter's snow. makeLevel sets them per round.
-  const WINTER_FROM = 100, WINTER_FULL = 199, SPRING_FROM = 200, SUMMER_FROM = 300;
-  const seasonOf = n => (n < WINTER_FROM ? 'autumn' : n < SPRING_FROM ? 'winter' : n < SUMMER_FROM ? 'spring' : 'summer');
+  const WINTER_FROM = 100, WINTER_FULL = 199, SPRING_FROM = 200, SUMMER_FROM = 300, FINALE_FROM = 400;
+  const seasonOf = n => (n < WINTER_FROM ? 'autumn' : n < SPRING_FROM ? 'winter' : n < SUMMER_FROM ? 'spring' : n < FINALE_FROM ? 'summer' : 'finale');
   const clamp01 = v => Math.max(0, Math.min(1, v));
   // `season` is the current round's season; `winter` is the same fact as a flag, for the many winter-only checks.
   let season = 'autumn', winter = false, fall = 0, snow = 0, cover = 0, snowfall = 0, seasonName = '';
@@ -264,6 +302,22 @@ button { touch-action: manipulation; }
     savedRound = n;
     try { localStorage.setItem(SAVE_KEY, String(n)); } catch (e) {}
   }
+  // Run stats, shown on the ending card: rounds cleared by playing (a jump with Go to round adds none),
+  // flops, times lost (caught, or dried out) and time played. They count from the version that added them,
+  // so a player with saved progress starts at 0 (`hadProgress` lets the card say so). Start over resets them.
+  const STATS_KEY = 'trout-trot-stats';
+  const freshStats = () => ({ rounds: 0, flops: 0, lost: 0, ms: 0, since: APP_VERSION, hadProgress: savedRound > 1 });
+  let stats = freshStats(), statsSaveT = 0;
+  try {
+    const s = JSON.parse(localStorage.getItem(STATS_KEY) || 'null');
+    if (s && typeof s.rounds === 'number' && typeof s.ms === 'number') stats = s;
+  } catch (e) {}
+  function saveStats() { try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) {} }
+  function resetStats() { stats = freshStats(); saveStats(); }
+  const fmtTime = ms => {
+    const s = Math.floor(ms / 1000), hr = Math.floor(s / 3600), mn = Math.floor(s % 3600 / 60);
+    return hr ? hr + ' h ' + mn + ' min' : mn ? mn + ' min ' + (s % 60) + ' s' : (s % 60) + ' s';
+  };
 
   const fish = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, angle: Math.PI, cooldown: 0, alpha: 1, lift: 0 };
   let flip = false, river = { base: 185, amp: 0, phase: 0, far: 60 };
@@ -306,6 +360,35 @@ button { touch-action: manipulation; }
   //  dusk      about one summer round in five (more later) is dusk: dark, warm light, fireflies, a shorter
   //            sight, one eagle and no osprey; and a raccoon that stalks the trout along the bank.
   let tall = [], tallBlades = {}, bars = [], floaters = [], dusk = false, raccoon = null, flies = [];
+  // The finale (round 400, "The Eagle's Nest") is a boss fight; boss is null in every other round.
+  //  bossLook  the arena's look in the current phase: '' (not the finale), 'autumn', 'snow' or 'storm'. The
+  //            checks that were winter-only (snow, bare trees, ice) also answer to bossLook 'snow', and
+  //            wind also answers to 'storm'.
+  let boss = null, bossLook = '', bossGround = '#7c9c52', bossFlash = 0, bossFlashColor = '255,255,255', bossCrown = null;
+  const FINALE_WW = 1100;
+  // Storm rounds (the winter snowstorm, rounds 100–199, and the spring thunderstorm, 260–299): the birds
+  // shelter, and the storm is the problem. `squall` is null on every other round (and in the finale).
+  //  wind       gusts, clearly stronger than summer's: a calm spell, then a one-second warning (the rain and
+  //             snow swing to the new direction, the grass flattens, a whoosh), then the gust, which shoves a
+  //             trout in the air and, on winter ice, pushes it along the ground. Each gust has its own direction,
+  //             including headwinds from the river. In the snowstorm a flop into the wind is weaker.
+  //  whiteout   snowstorm only: now and then the sight radius closes in, then recovers.
+  //  strike     thunderstorm only: a yellow-white warning ring, then a lightning strike; the trout is safe if it
+  //             has left the ring (or is high in a hop) by then.
+  // Everything gets worse later in the season (`sev`, 0 to 1): stronger, more frequent gusts and strikes.
+  let squall = null;
+  const stormRound = () => (weather === 'storm' || weather === 'thunder') && season !== 'finale';
+  const STRIKE_R = 70;
+  const GUST_DIRS = [[0, 1], [0, -1], [1, 0], [1, 0], [0.707, 0.707], [0.707, -0.707], [-1, 0]]; // [along the bank..., toward the trees]
+  function newSquall(n) {
+    const sev = n >= SPRING_FROM ? clamp01((n - 260) / 39) : clamp01((n - WINTER_FROM) / 99);
+    return { sev, ice: n < SPRING_FROM, state: 'calm', st: rnd(3, 5), wx: 0, wy: 0, env: 0, vx: 0, vy: 0, vsx: 0, vsy: 0, whiteT: rnd(6, 10), whiteAge: 99, whiteEnv: 0,
+      strike: { phase: 'idle', t: 0, lockDur: 1, hold: 0, tx: 0, ty: 0, next: rnd(4, 6), bolt: 0 } };
+  }
+  const stormWhite = () => (squall ? squall.whiteEnv : 0);
+  const coldNow = () => winter || bossLook === 'snow';
+  const windy = () => weather === 'wind' || bossLook === 'storm';
+  const finaleCalm = () => (boss ? 0.3 : 1); // drying is gentle in the arena: moisture is not the challenge
   const TALL_SLOW = 0.8;
   const inTallGrass = (x, y) => tall.some(p => ((x - p.x) / p.rx) ** 2 + ((y - p.y) / p.ry) ** 2 < 1);
   const barAt = y => { let b = 0; for (const s of bars) { const t = (y - s.y) / (s.len / 2); if (t > -1 && t < 1) b = Math.max(b, s.h * (1 - t * t)); } return b; };
@@ -319,7 +402,7 @@ button { touch-action: manipulation; }
   const SHADE_DRAIN = 0.6, WIND_PUSH = 110;
   const shadeAt = (x, y) => shadeTrees.some(t => Math.hypot(x - t.x, y - t.y) < t.r * 1.1);
   const shadeFactor = () => (shadeTrees.length && shadeAt(fish.x, fish.y) ? SHADE_DRAIN : 1);
-  const gustNow = () => (weather === 'wind' ? clamp01(0.2 + 0.8 * Math.max(0, Math.sin(clock * 0.8 + Math.sin(clock * 0.31) * 2))) : 0);
+  const gustNow = () => (windy() ? clamp01(0.2 + 0.8 * Math.max(0, Math.sin(clock * 0.8 + Math.sin(clock * 0.31) * 2))) : 0);
   // How much of its full show a kind of flower puts on this round (0 to 1): bluebells early (200–230),
   // trillium in the middle (219–261), dandelions later (239–300).
   const flowerShare = (kind, n) => kind === 'bluebell' ? clamp01(n <= 214 ? 1 : (231 - n) / 17)
@@ -346,8 +429,8 @@ button { touch-action: manipulation; }
   // so only an ice-fishing hole will do; the trout slides across the ice to reach one.
   const holeAt = (x, y) => holes.find(h => Math.hypot(x - h.x, y - h.y) < h.r);
   // In spring, early on, floes cover stretches of the water's edge: landing on one doesn't count.
-  const inRiver = () => fish.z < 6 && (winter ? !!holeAt(fish.x, fish.y) : fish.x < edgeAt(fish.y) - 4 && !(floes.length && floeAt(fish.x, fish.y)));
-  const onIce = () => winter && fish.x < shoreAt(fish.y);
+  const inRiver = () => fish.z < 6 && (winter ? !!holeAt(fish.x, fish.y) : fish.x < edgeAt(fish.y) - 4 && !(floes.length && floeAt(fish.x, fish.y)) && !(boss && !boss.beaten));
+  const onIce = () => (winter && fish.x < shoreAt(fish.y)) || bossLook === 'snow'; // the finale's winter phase is slippery all over
   // Nothing presses the trout until it makes its first flop of the round (swipe, tap or arrow
   // key): moisture stays full and the eagles hold off, so a round starts when the player is ready.
   let troutMoved = false;
@@ -359,7 +442,7 @@ button { touch-action: manipulation; }
   const flopScale = () => winter ? 1 - 0.04 * (Math.floor((Math.min(level, WINTER_FULL) - WINTER_FROM) / 10) + 1)
     : season === 'spring' ? 0.6 + 0.4 * clamp01((level - SPRING_FROM) / 50) : 1;
   // Rain slows it a little; summer's sun speeds it up, and shade slows it again.
-  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale() * sky().drain * summerHeat() * shadeFactor();
+  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale() * sky().drain * summerHeat() * shadeFactor() * finaleCalm();
   const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
 
   // ---------- level ----------
@@ -373,7 +456,7 @@ button { touch-action: manipulation; }
     dusk = season === 'summer' && Math.random() < duskChance(n); // a summer evening: darker, fewer birds, and a raccoon
     springGround = shadeHex('#8d7b57', '#7c9c52', spring.green); // mud turning to grass
     // Each round the trout lands 40 units (about 1 ft) farther from the river, up to MAX_ROUND.
-    WW = 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52;
+    WW = n >= FINALE_FROM ? FINALE_WW : 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52; // the finale's bank is short and wide
     river = { base: rnd(178, 192), amp: Math.min(n * 8, 45), phase: rnd(0, 6), far: 60 };
     place = PLACES[(n - 1) % PLACES.length];
     fish.x = rnd(WW - 130, TREES - 45); fish.y = rnd(260, WH - 170);
@@ -422,7 +505,7 @@ button { touch-action: manipulation; }
     // Invisibility bubble, somewhere between the trout and the river, and always out of every
     // heron's reach, even for a trout touching the edge of the bubble's pickup range.
     powerup.active = false; invisible = 0;
-    if (n >= INVIS_FROM) {
+    if (n >= INVIS_FROM && n < FINALE_FROM) {
       for (let tries = 0; tries < 300; tries++) {
         const y = rnd(TOP + 50, BOTTOM - 50), lo = shoreAt(y) + 60;
         const x = rnd(lo, Math.max(lo + 10, fish.x - 160));
@@ -572,7 +655,7 @@ button { touch-action: manipulation; }
     // Fly anglers wading the shallows, spaced well apart. Not in winter, when the river is frozen,
     // nor in the first rounds of spring, while the floes are still drifting by (trout season opens at 205).
     anglers = [];
-    const na = winter || (spr && n < ANGLERS_BACK) ? 0 : n === 1 ? 1 : Math.random() < 0.6 ? 2 : 1;
+    const na = winter || n >= FINALE_FROM || (spr && n < ANGLERS_BACK) ? 0 : n === 1 ? 1 : Math.random() < 0.6 ? 2 : 1;
     for (let i = 0, tries = 0; i < na && tries < 100; tries++) {
       const y = rnd(TOP + 40, BOTTOM - 40);
       if (anglers.every(a => Math.abs(a.y - y) > 220)) {
@@ -598,6 +681,8 @@ button { touch-action: manipulation; }
     makeTeams();
     weather = winter ? rollWeather() : spr ? rollSpringWeather(n) : sum ? rollSummerWeather() : 'clear';
     if (dusk) weather = 'clear'; // evenings are calm and clear
+    squall = stormRound() ? newSquall(n) : null;
+    if (squall) { eagles = []; teams = []; herons = []; eagleCatcher = null; } // the eagles, ospreys and herons shelter from the storm
     // Puddles only after rain: a few, clear of the start spot and the water's edge.
     puddles = [];
     if (spr && (weather === 'rain' || weather === 'thunder')) {
@@ -609,8 +694,10 @@ button { touch-action: manipulation; }
     moisture = 100; bannerTimer = 1.6;
     troutMoved = false; // the round starts on the first flop
     raccoon = dusk ? { active: false, t: rnd(3.5, 5.5), x: 0, y: 0, step: 0 } : null;
-    seasonName = n === 1 ? 'Autumn' : n === WINTER_FROM ? 'Winter' : n === SPRING_FROM ? 'Spring' : n === SUMMER_FROM ? 'Summer' : ''; // each season's first round opens with its name
+    seasonName = n === 1 ? 'Autumn' : n === WINTER_FROM ? 'Winter' : n === SPRING_FROM ? 'Spring' : n === SUMMER_FROM ? 'Summer' : n === FINALE_FROM ? "The Eagle's Nest" : ''; // each season's first round opens with its name
     seasonTimer = seasonName ? SEASON_TIME : 0;
+    boss = null; bossLook = ''; bossFlash = 0; bossCrown = null;
+    if (season === 'finale') setupFinale();
     cam = camTarget();
     ui.round.textContent = n;
   }
@@ -686,14 +773,14 @@ button { touch-action: manipulation; }
     if (!layoutReady) makeLevel(level);
     layoutReady = false;
     mode = 'play';
-    ui.start.hidden = ui.over.hidden = ui.pause.hidden = true; ui.hud.hidden = false;
+    ui.start.hidden = ui.over.hidden = ui.pause.hidden = ui.end.hidden = true; ui.hud.hidden = false;
     updateHud();
     announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.' + (level === 1 ? ' Swipe toward the river.' : ''));
   }
   // Pause works mid-round and during the splash and dying animations; resume returns to that state.
   let pausedFrom = 'play';
   function pauseGame() {
-    if (mode !== 'play' && mode !== 'saved' && mode !== 'dying') return;
+    if (mode !== 'play' && mode !== 'saved' && mode !== 'dying' && mode !== 'ending') return;
     pausedFrom = mode; mode = 'paused'; queuedFlop = null; ptr = null;
     gotoInput.value = Math.min(savedRound, MAX_PICK); disarmGoto();
     lightning.glow = 0; lightning.echo = 0; // no flash left on screen while paused
@@ -709,34 +796,36 @@ button { touch-action: manipulation; }
   gotoInput.max = MAX_PICK; gotoError.textContent = GOTO_RANGE_TEXT;
   let gotoArmed = 0; // the round a first tap on Go is waiting to confirm going back to
   function disarmGoto() { gotoArmed = 0; gotoError.hidden = true; gotoError.textContent = GOTO_RANGE_TEXT; }
-  function goToRound(e) {
+  // `input` and `err` are the round box and its message: the pause menu's, or the ending card's.
+  function goToRound(e, input = gotoInput, err = gotoError) {
     e.preventDefault();
-    const text = String(gotoInput.value).trim(), n = Number(text);
+    const text = String(input.value).trim(), n = Number(text);
     if (!/^\d+$/.test(text) || n < 1 || n > MAX_PICK) {
-      gotoArmed = 0; gotoError.textContent = GOTO_RANGE_TEXT; gotoError.hidden = false; gotoInput.focus();
+      gotoArmed = 0; err.textContent = GOTO_RANGE_TEXT; err.hidden = false; input.focus();
       return;
     }
     if (n < savedRound && gotoArmed !== n) {
       gotoArmed = n;
-      gotoError.textContent = 'Tap Go again: your progress goes back from round ' + savedRound + ' to ' + n + '.';
-      gotoError.hidden = false;
+      err.textContent = 'Tap Go again: your progress goes back from round ' + savedRound + ' to ' + n + '.';
+      err.hidden = false;
       return;
     }
-    disarmGoto(); gotoInput.blur();
+    disarmGoto(); err.hidden = true; err.textContent = GOTO_RANGE_TEXT; input.blur();
     saveRound(n);
     level = n; hintOn = true;
     makeLevel(n);
     mode = 'play'; layoutReady = false;
-    ui.pause.hidden = true; ui.hud.hidden = false;
+    ui.pause.hidden = true; ui.end.hidden = true; ui.hud.hidden = false;
     last = performance.now();
     updateHud();
     announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
   }
-  function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
+    function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
   function reachRiver() {
     mode = 'saved'; stateTimer = 1.4;
+    stats.rounds++; saveStats();
     savedHole = winter ? holeAt(fish.x, fish.y) : null;
-    saveRound(level + 1);
+    if (season !== 'finale') saveRound(level + 1); // the finale is the last round
     for (const e of eagles) e.phase = 'off';
     burst(fish.x, fish.y, 30, '#d6f1ee', 260);
     ripples.push({ x: fish.x, y: fish.y, age: 0 });
@@ -746,6 +835,7 @@ button { touch-action: manipulation; }
   }
   function lose(reason) {
     mode = 'dying'; stateTimer = 1.4; deathBy = reason;
+    stats.lost++; saveStats();
     // Every other eagle stands down, so no shadow or ring is left frozen mid-dive.
     for (const e of eagles) if (e !== eagleCatcher) e.phase = 'off';
     if (reason === 'dry') { moisture = 0; tone(300, 0.6, 'triangle', 0.12, 0.4); }
@@ -754,7 +844,7 @@ button { touch-action: manipulation; }
   }
   function showOver() {
     mode = 'over';
-    ui.overTitle.textContent = { eagle: 'Snatched by an eagle', raccoon: 'Caught by a raccoon', osprey: 'Plucked by an osprey', heron: 'Speared by a heron' }[deathBy] || 'Dried out';
+    ui.overTitle.textContent = { lightning: 'Struck by lightning', eagle: 'Snatched by an eagle', great: 'Caught by the Great Eagle', raccoon: 'Caught by a raccoon', osprey: 'Plucked by an osprey', heron: 'Speared by a heron' }[deathBy] || 'Dried out';
     ui.overRound.textContent = 'Round ' + level;
     ui.hud.hidden = true; ui.over.hidden = false;
     $('againBtn').focus();
@@ -772,14 +862,15 @@ button { touch-action: manipulation; }
       ui.power.hidden = secs <= 0;
       if (secs > 0) ui.power.textContent = 'Invisible ' + secs + 's';
     }
+    updateFeathers();
   }
-  let shownPowerSecs = -1;
+  let shownPowerSecs = -1, shownFeathers = -1;
 
   // ---------- flops ----------
   const canFlop = () => mode === 'play' && fish.z === 0 && fish.vz === 0 && fish.cooldown <= 0;
   // Input buffer: a flop asked for mid-air is remembered and fires the moment the trout lands,
   // instead of being dropped. Presses older than FLOP_BUFFER seconds are discarded.
-  const FLOP_BUFFER = 0.5;
+  const FLOP_BUFFER = 0.15; // a swipe this close to landing fires on landing; earlier ones are dropped
   let queuedFlop = null;
   function requestFlop(dx, dy, mag) {
     if (mode !== 'play') return;
@@ -794,7 +885,12 @@ button { touch-action: manipulation; }
     if (canFlop()) { const q = queuedFlop; queuedFlop = null; launch(q.dx, q.dy, q.mag); }
   }
   function launch(dx, dy, mag) {
+    stats.flops++;
     mag *= flopScale();
+    if (squall && squall.ice && squall.env > 0.05) { // snowstorm: a flop into the wind is weaker (up to 30% in a full gust)
+      const dot = (dx * squall.wx + dy * squall.wy) / (Math.hypot(dx, dy) || 1);
+      if (dot < 0) mag *= 1 + 0.3 * dot * squall.env;
+    }
     if (mud.length && mudAt(fish.x, fish.y)) mag *= MUD_SLOW; // soft ground
     if (tall.length && inTallGrass(fish.x, fish.y)) mag *= TALL_SLOW; // wading through tall grass
     troutMoved = true;
@@ -810,6 +906,7 @@ button { touch-action: manipulation; }
   // ---------- input ----------
   let ptr = null;
   cv.addEventListener('pointerdown', e => {
+    if (mode === 'ending') { skipEnding(); return; }
     if (ptr && ptr.id !== e.pointerId) return; // ignore a second finger until the first lifts
     ptr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
     try { cv.setPointerCapture(e.pointerId); } catch (err) {}
@@ -834,6 +931,7 @@ button { touch-action: manipulation; }
     const typing = e.target && e.target.tagName === 'INPUT';
     if (e.key === 'Escape' || (e.key === 'p' && !typing)) { mode === 'paused' ? resumeGame() : pauseGame(); return; }
     if (typing) return;
+    if (mode === 'ending' && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); skipEnding(); return; }
     const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const d = dirs[e.key];
     if (!d) return;
@@ -843,6 +941,21 @@ button { touch-action: manipulation; }
   // Pause whenever the game loses the player's attention: tab hidden, focus moved away
   // (notification shade, incoming call, clicking outside), page put in the background or frozen.
   document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+  // Android's back button and edge-swipe back gesture (only in the native app, where Capacitor's App plugin
+  // exists; the plain web build has no such plugin and skips this). Back never quits on its own: in a round
+  // it pauses, when paused it resumes, during the ending it skips the scene, and on the start screen, the
+  // game-over card and the ending card it asks "Leave Trout Trot?" first.
+  function handleBack() {
+    if (!ui.leave.hidden) { ui.leave.hidden = true; return; }
+    if (mode === 'ending') { skipEnding(); return; }
+    if (mode === 'play' || mode === 'saved' || mode === 'dying') { pauseGame(); return; }
+    if (mode === 'paused') { resumeGame(); return; }
+    ui.leave.hidden = false; $('stayBtn').focus();
+  }
+  $('stayBtn').addEventListener('click', () => { ui.leave.hidden = true; });
+  $('leaveBtn').addEventListener('click', () => { try { nativeApp.exitApp(); } catch (e) { ui.leave.hidden = true; } });
+  const nativeApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  try { if (nativeApp && nativeApp.addListener) nativeApp.addListener('backButton', handleBack); } catch (e) {}
   addEventListener('blur', pauseGame);
   addEventListener('pagehide', pauseGame);
   document.addEventListener('freeze', pauseGame);
@@ -862,13 +975,38 @@ button { touch-action: manipulation; }
       return;
     }
     disarmRestart();
-    saveRound(1);
+    saveRound(1); resetStats();
     level = 1; makeLevel(1); layoutReady = true;
     restartBtn.hidden = true;
     $('startBtn').focus();
     announce('Progress reset. Starting from round 1.');
   });
   $('againBtn').addEventListener('click', startGame);
+  // The ending card's menu: Fight again (round 400), Go to round, and Start over (two taps, as on the start screen).
+  $('fightBtn').addEventListener('click', () => { saveRound(400); startGame(); });
+  $('endGoto').addEventListener('submit', e => goToRound(e, $('endGotoInput'), $('endGotoError')));
+  $('endGotoInput').addEventListener('input', () => { gotoArmed = 0; $('endGotoError').hidden = true; $('endGotoError').textContent = GOTO_RANGE_TEXT; });
+  $('endGotoInput').max = MAX_PICK;
+  const endRestartBtn = $('endRestartBtn');
+  let endRestartArmed = null;
+  function disarmEndRestart() {
+    clearTimeout(endRestartArmed); endRestartArmed = null;
+    endRestartBtn.textContent = 'Start over'; endRestartBtn.classList.remove('armed');
+  }
+  endRestartBtn.addEventListener('click', () => {
+    if (!endRestartArmed) {
+      endRestartBtn.textContent = 'Tap again to start over at round 1';
+      endRestartBtn.classList.add('armed');
+      endRestartArmed = setTimeout(disarmEndRestart, 4000);
+      return;
+    }
+    disarmEndRestart();
+    saveRound(1); resetStats();
+    level = 1; makeLevel(1); layoutReady = true; mode = 'title';
+    ui.end.hidden = true; ui.start.hidden = false; restartBtn.hidden = true;
+    $('startBtn').focus();
+    announce('Progress reset. Starting from round 1.');
+  });
   $('resumeBtn').addEventListener('click', resumeGame);
   $('gotoForm').addEventListener('submit', goToRound);
   gotoInput.addEventListener('input', disarmGoto);
@@ -893,7 +1031,7 @@ button { touch-action: manipulation; }
       const dx = fish.x - b.x, dy = fish.y - b.y, d = Math.hypot(dx, dy), min = b.r + FR;
       if (d < min && d > 0.001) {
         fish.x = b.x + dx / d * min; fish.y = b.y + dy / d * min;
-        bounce(dx / d, dy / d, 0.45);
+        bounce(dx / d, dy / d, boss ? 0.05 : 0.45); // in the finale a rock stops the trout beside it, so the lure can be aimed at
       }
     }
     if (fish.z < 14) {
@@ -904,13 +1042,15 @@ button { touch-action: manipulation; }
           let nx, ny;
           if (d > 0.001) { nx = dx / d; ny = dy / d; fish.x = cx + nx * FR; fish.y = cy + ny * FR; }
           else { nx = fish.x < l.x + l.w / 2 ? -1 : 1; ny = 0; fish.x = nx < 0 ? l.x - FR : l.x + l.w + FR; }
-          bounce(nx, ny, 0.3);
+          bounce(nx, ny, boss ? 0.05 : 0.3);
         }
       }
     }
     if (fish.x > TREES - FR) { fish.x = TREES - FR; bounce(-1, 0, 0.4); }
     // In winter the trout can cross the ice, and bounces off the bluff on the far side.
     if (winter && fish.x < farAt(fish.y) + FR) { fish.x = farAt(fish.y) + FR; bounce(1, 0, 0.4); }
+    // The finale: the river is shut until the Great Eagle is beaten, so the trout bounces off the bank's edge.
+    if (boss && !boss.beaten && fish.x < shoreAt(fish.y) + FR) { fish.x = shoreAt(fish.y) + FR; bounce(1, 0, 0.4); boss.blockT = 2.6; }
     if (fish.y < TOP) { fish.y = TOP; bounce(0, 1, 0.4); }
     if (fish.y > BOTTOM) { fish.y = BOTTOM; bounce(0, -1, 0.4); }
   }
@@ -923,7 +1063,7 @@ button { touch-action: manipulation; }
   // from 150 through 199. Spring goes back to one eagle.
   // In spring it is one eagle, then one pair from round 250 (the winter pair logic, with the autumn dive).
   const EAGLE_PAIR_FROM = 250;
-  const eagleCount = n => n < EAGLE_FROM ? 0 : seasonOf(n) === 'spring' || seasonOf(n) === 'summer' ? (n < EAGLE_PAIR_FROM ? 1 : 2)
+  const eagleCount = n => n < EAGLE_FROM || n >= FINALE_FROM ? 0 : seasonOf(n) === 'spring' || seasonOf(n) === 'summer' ? (n < EAGLE_PAIR_FROM ? 1 : 2)
     : seasonOf(n) === 'autumn' ? 1 : n < 150 ? 2 : 4;
   // From round 10 it flies in and circles 5% faster every 10 rounds, compounding, up to
   // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. The dive itself
@@ -982,7 +1122,7 @@ button { touch-action: manipulation; }
   // Summer rounds: mostly clear; 15% heat wave, 10% downpour, 10% wind.
   const rollSummerWeather = () => { const r = Math.random(); return r < 0.15 ? 'heat' : r < 0.25 ? 'downpour' : r < 0.35 ? 'wind' : 'clear'; };
   // The round banner's second line: the place, plus the weather when it's snowing.
-  const placeLine = () => place + (sky().label ? ' · ' + sky().label : '') + (dusk ? ' · Dusk' : '');
+  const placeLine = () => place + (sky().label ? ' · ' + sky().label : '') + (dusk ? ' · Dusk' : '') + (squall ? ' · Eagles sheltering' : '');
 
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
@@ -1030,6 +1170,7 @@ button { touch-action: manipulation; }
   }
   function updateEagle(e, dt) {
     if (e.phase === 'off' || mode !== 'play') return;
+    if (e.boss) return; // the finale's birds are run by updateBoss
     if (e.kind === 'osprey') { updateOsprey(e, dt); return; }
     e.t -= dt;
     const sk = EAGLE, fast = eagleSpeedUp();
@@ -1230,6 +1371,7 @@ button { touch-action: manipulation; }
   const HERON_BACK = 210, ANGLERS_BACK = 205, CANOE_BACK = 240;
   const heronCount = n => {
     const s = seasonOf(n);
+    if (s === 'finale') return 0;
     if (s === 'spring' || s === 'summer') return n < HERON_BACK ? 0 : Math.min(5, 1 + Math.floor((n - HERON_BACK) / 20));
     return n < 10 || s === 'winter' ? 0 : Math.floor(n / 10);
   };
@@ -1324,7 +1466,8 @@ button { touch-action: manipulation; }
     if (flakes.length > want) flakes.length = want;
     if (reduced) return;
     for (const f of flakes) {
-      f.y += f.vy * (storm ? 2.2 : 1) * dt; f.x += (Math.sin(clock * 0.8 + f.ph) * 14 + (storm ? 260 : 0)) * dt;
+      if (squall) { f.y += (f.vy * 2.2 + squall.vsy * 560) * dt; f.x += (Math.sin(clock * 0.8 + f.ph) * 14 + squall.vsx * 560) * dt; } // the snowstorm follows the gusts
+      else { f.y += f.vy * (storm ? 2.2 : 1) * dt; f.x += (Math.sin(clock * 0.8 + f.ph) * 14 + (storm ? 260 : 0)) * dt; }
       if (f.y > H + 4) { f.y = -4; f.x = Math.random() * W; }
       if (f.x < 0) f.x += W; else if (f.x > W) f.x -= W;
     }
@@ -1334,7 +1477,9 @@ button { touch-action: manipulation; }
     if (weather === 'storm') { // wind-driven streaks
       ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
       ctx.beginPath();
-      for (const f of flakes) { ctx.moveTo(f.x, f.y); ctx.lineTo(f.x - 11, f.y - 5); }
+      let sx = 11, sy = 5;
+      if (squall) { const vx = squall.vsx * 560, vy = 110 + squall.vsy * 560, L = 13 / (Math.hypot(vx, vy) || 1); sx = vx * L; sy = vy * L; }
+      for (const f of flakes) { ctx.moveTo(f.x, f.y); ctx.lineTo(f.x - sx, f.y - sy); }
       ctx.stroke();
       return;
     }
@@ -1357,9 +1502,10 @@ button { touch-action: manipulation; }
     if (drops.length > want) drops.length = want;
     if (reduced) return;
     for (const d of drops) {
-      d.y += d.vy * dt; d.x -= d.vy * 0.16 * dt;
+      if (squall) { d.y += (d.vy + squall.vsy * 500) * dt; d.x += (squall.vsx * 520 - d.vy * 0.16) * dt; } // the rain swings with the gusts
+      else { d.y += d.vy * dt; d.x -= d.vy * 0.16 * dt; }
       if (d.y > H + 20) { d.y = -20; d.x = Math.random() * (W + 120); }
-      if (d.x < -20) d.x += W + 40;
+      if (d.x < -20) d.x += W + 40; else if (squall && d.x > W + 20) d.x -= W + 40;
     }
     if (weather !== 'thunder' || mode !== 'play') { lightning.glow = 0; return; }
     lightning.glow = Math.max(0, lightning.glow - dt * 5);
@@ -1371,13 +1517,17 @@ button { touch-action: manipulation; }
     const storm = weather === 'thunder' || weather === 'downpour';
     ctx.strokeStyle = storm ? 'rgba(210,224,238,0.6)' : 'rgba(205,222,235,0.5)'; ctx.lineWidth = storm ? 1.5 : 1.2; ctx.lineCap = 'round';
     ctx.beginPath();
-    for (const d of drops) { ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + d.len * 0.16, d.y - d.len); }
+    for (const d of drops) {
+      ctx.moveTo(d.x, d.y);
+      if (squall) { const vx = squall.vsx * 520 - 122, vy = 760 + squall.vsy * 500, L = d.len / (Math.hypot(vx, vy) || 1); ctx.lineTo(d.x - vx * L, d.y - vy * L); }
+      else ctx.lineTo(d.x + d.len * 0.16, d.y - d.len);
+    }
     ctx.stroke();
   }
   // Windy rounds: leaves blow along the river in the gust's direction (screen space, at most 40).
   let gustLeaves = [];
   function updateGust(dt) {
-    const want = weather === 'wind' ? Math.min(40, Math.round(36 * (W * H) / (412 * 915))) : 0;
+    const want = windy() ? Math.min(40, Math.round(36 * (W * H) / (412 * 915))) : 0;
     while (gustLeaves.length < want) gustLeaves.push({ x: Math.random() * W, y: Math.random() * H, ph: rnd(0, 6), c: Math.random() < 0.5 ? '#5f8a3e' : '#8a7a4a' });
     if (gustLeaves.length > want) gustLeaves.length = want;
     if (reduced) return;
@@ -1407,7 +1557,7 @@ button { touch-action: manipulation; }
 
   function updateCanoe(dt) {
     // No paddling on a frozen river, nor on the spring flood until it clears (round 240).
-    if (winter || season === 'summer' || (season === 'spring' && level < CANOE_BACK)) { canoe.active = false; return; } // summer has its own floaters
+    if (winter || season === 'summer' || season === 'finale' || (season === 'spring' && level < CANOE_BACK)) { canoe.active = false; return; } // summer has its own floaters
     if (!canoe.active) {
       canoe.t -= dt;
       if (canoe.t <= 0) {
@@ -1423,6 +1573,10 @@ button { touch-action: manipulation; }
 
   function update(dt) {
     clock += dt;
+    if (mode === 'play' || mode === 'saved' || mode === 'dying') { // time played
+      stats.ms += dt * 1000;
+      if ((statsSaveT += dt) > 15) { statsSaveT = 0; saveStats(); }
+    }
     // Banners only count down in play, so a bank built behind the start card still shows them.
     if (mode === 'play') {
       if (seasonTimer > 0) seasonTimer -= dt;
@@ -1435,7 +1589,7 @@ button { touch-action: manipulation; }
     if (mode === 'play') {
       fish.cooldown -= dt;
       fish.x += fish.vx * dt; fish.y += fish.vy * dt;
-      if (weather === 'wind' && (fish.z > 0 || fish.vz > 0)) fish.y += windDir * WIND_PUSH * gustNow() * dt; // gusts shove it sideways in the air
+      if (windy() && (fish.z > 0 || fish.vz > 0)) fish.y += windDir * WIND_PUSH * gustNow() * dt; // gusts shove it sideways in the air
       if (fish.z > 0 || fish.vz > 0) {
         fish.vz -= GRAV * dt; fish.z += fish.vz * dt;
         if (fish.z <= 0) {
@@ -1472,6 +1626,8 @@ button { touch-action: manipulation; }
       updatePowerup(dt);
       if (troutMoved) { for (const e of eagles) updateEagle(e, dt); updateTeams(dt); }
       if (raccoon && troutMoved) updateRaccoon(raccoon, dt);
+      if (boss && troutMoved) updateBoss(dt);
+      if (squall && troutMoved) updateSquall(dt);
       updateHerons(dt);
       if (mode === 'play') {
         if (inRiver()) { if (floaters.length && floaterAt(fish.x, fish.y)) bumpFish(); else reachRiver(); }
@@ -1496,12 +1652,19 @@ button { touch-action: manipulation; }
       fish.alpha = Math.max(0, stateTimer / 1.4);
       stateTimer -= dt;
       if (stateTimer <= 0) {
-        level++; makeLevel(level); mode = 'play'; updateHud();
-        announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+        if (season === 'finale') startEnding();
+        else {
+          level++; makeLevel(level); mode = 'play'; updateHud();
+          announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+        }
       }
+    } else if (mode === 'ending') {
+      endScene.t += dt;
+      for (let i = 0; i < 3; i++) if (!endScene.sq[i] && endScene.t > 3.2 + i * 0.6 && !reduced) { endScene.sq[i] = 1; tone(1900 - i * 150, 0.1, 'square', 0.04, 0.4); } // the eaglets complain
+      if (endScene.t >= endLength()) showEndCard();
     } else if (mode === 'dying') {
       updateHerons(dt);
-      if ((deathBy === 'eagle' || deathBy === 'osprey') && eagleCatcher) { fish.lift += dt * 1.5; eagleCatcher.y -= 260 * dt; fish.y -= 260 * dt; }
+      if ((deathBy === 'eagle' || deathBy === 'osprey' || deathBy === 'great') && eagleCatcher) { fish.lift += dt * 1.5; eagleCatcher.y -= 260 * dt; fish.y -= 260 * dt; }
       if (deathBy === 'heron' && heronCatcher) {
         // Held up in the heron's bill.
         const h = heronCatcher;
@@ -1522,6 +1685,7 @@ button { touch-action: manipulation; }
     updateRain(dt);
     updateGust(dt);
     updateFlies(dt);
+    if (bossFlash > 0) bossFlash = Math.max(0, bossFlash - dt * 1.6);
     ripples = ripples.filter(r => r.age < 1.4);
   }
 
@@ -1533,7 +1697,7 @@ button { touch-action: manipulation; }
   }
 
   // Autumn grass, winter's dead brown grass, or spring's mud greening over.
-  const groundColor = () => (winter ? '#a2946a' : season === 'spring' ? springGround : season === 'summer' ? '#668f42' : '#7c9c52');
+  const groundColor = () => (winter ? '#a2946a' : season === 'spring' ? springGround : season === 'summer' ? '#668f42' : season === 'finale' ? bossGround : '#7c9c52');
   const onScreen = (x, pad) => x > cam - pad && x < cam + view.w + pad;
   const snowColor = a => 'rgba(246,249,251,' + a + ')';
   const SNOW = snowColor(0.92);
@@ -1559,7 +1723,7 @@ button { touch-action: manipulation; }
       ctx.fillStyle = l.c; ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
       ctx.restore();
     }
-    if (winter && cover > 0) drawGroundSnow(sec);
+    if (coldNow() && cover > 0) drawGroundSnow(sec);
     else if (drifts.length) drawDrifts(); // spring's last patches of snow
   }
 
@@ -1713,7 +1877,8 @@ button { touch-action: manipulation; }
   // the bank as a wave, so neighboring tufts bend together. Still under reduced motion.
   function drawGrass(sec) {
     const t = reduced ? 0 : sec;
-    const windLean = weather === 'wind' ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
+    const windLean = windy() ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
+    const leanX = squall ? squall.vx * 1.5 : 0, leanY = squall ? squall.vy * 1.5 : 0; // in a storm they flatten along the gust
     ctx.lineWidth = 2; ctx.lineCap = 'round';
     for (const c in grass) {
       ctx.strokeStyle = c;
@@ -1729,7 +1894,7 @@ button { touch-action: manipulation; }
         const base = -Math.PI / 2 + g.a, tip = base + gust * (g.len / 12);
         const mx = g.x + Math.cos(base) * g.len * 0.5, my = g.y + Math.sin(base) * g.len * 0.5;
         ctx.moveTo(g.x, g.y);
-        ctx.quadraticCurveTo(mx, my + windLean * g.len * 0.5, g.x + Math.cos(tip) * g.len, g.y + Math.sin(tip) * g.len + windLean * g.len);
+        ctx.quadraticCurveTo(mx + leanX * g.len * 0.5, my + windLean * g.len * 0.5 + leanY * g.len * 0.5, g.x + Math.cos(tip) * g.len + leanX * g.len, g.y + Math.sin(tip) * g.len + windLean * g.len + leanY * g.len);
       }
       ctx.stroke();
     }
@@ -1818,6 +1983,7 @@ button { touch-action: manipulation; }
     drawBars();
     drawFloes(sec);
     drawFloaters(sec);
+    if (boss && !boss.beaten) drawBarrier(sec);
     if (season === 'summer') drawDragonflies(sec);
   }
 
@@ -1897,6 +2063,515 @@ button { touch-action: manipulation; }
   function bumpFish() {
     fish.x = edgeAt(fish.y) + 10; fish.vx = 130; fish.vy = 0; fish.vz = 230; fish.z = 0.01; fish.cooldown = 0.35;
     burst(fish.x, fish.y, 8, '#d6f1ee', 120); tone(140, 0.14, 'triangle', 0.14, 0.5); announce('Bumped back onto the bank.');
+  }
+
+  // ---------- the finale: The Eagle's Nest ----------
+  // Round 400 is one boss fight in a short, wide arena under a giant cottonwood whose crown holds a big
+  // stick nest with two eaglets. The Great Eagle hunts the trout with the usual dive: a ring drops on
+  // it, then the eagle strikes. When its dive lands with the ring over a lure (a boulder, stump or log),
+  // it slams into it and is stunned and loses a feather; three feathers beat it. Each lure changes the
+  // arena: autumn (the Watch), then winter (the Pair), then the storm. Being caught restarts the whole
+  // fight. The river stays shut until the Great Eagle is beaten.
+  const BOSS_PHASE = [null,
+    { look: 'autumn', name: 'Autumn', title: 'The Watch', warn: 1.0, steer: 0, circle: 3.2, rest: 5.0, radius: 100, mate: false, harrier: false },
+    { look: 'snow', name: 'Winter', title: 'The Pair', warn: 0.9, steer: 0, circle: 2.8, rest: 4.5, radius: 92, mate: true, harrier: false },
+    { look: 'storm', name: 'The Storm', title: '', warn: 0.85, steer: 90, circle: 2.4, rest: 4.0, radius: 90, mate: false, harrier: true }
+  ];
+  // Generous on purpose: the ring only has to be over (or just beside) the lure.
+  const LURE_PAD = 20;
+  function lureAt(x, y) { // a lure the Great Eagle has already hit is cracked and no use again
+    for (const b of boulders) if (!b.used && Math.hypot(x - b.x, y - b.y) < b.r + LURE_PAD) return b;
+    for (const l of logs) {
+      if (l.used) continue;
+      const cx = Math.max(l.x, Math.min(x, l.x + l.w)), cy = Math.max(l.y, Math.min(y, l.y + l.h));
+      if (Math.hypot(x - cx, y - cy) < LURE_PAD) return l;
+    }
+    return null;
+  }
+  function setupFinale() {
+    boulders = []; logs = []; springs = []; herons = []; heronCatcher = null; anglers = []; floaters = []; floes = []; mud = []; puddles = [];
+    tall = []; tallBlades = {}; bars = []; shadeTrees = []; shadePool = []; raccoon = null; powerup.active = false; invisible = 0;
+    teams = []; eagleCatcher = null;
+    // A 5 x 3 grid of lures, one per cell with a little jitter, so one is never far from any spot on the bank.
+    const x0 = river.base + 150, x1 = TREES - 30, cw = (x1 - x0) / 5, ch = (BOTTOM - TOP - 40) / 3;
+    for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) {
+      for (let tries = 0; tries < 30; tries++) {
+        const cx = x0 + (i + 0.5) * cw + rnd(-cw * 0.15, cw * 0.15), cy = TOP + 20 + (j + 0.5) * ch + rnd(-ch * 0.15, ch * 0.15), t = (i * 3 + j) % 4;
+        if (t === 2) {
+          const hh = rnd(90, 130);
+          if (Math.hypot(cx - fish.x, cy - fish.y) > hh / 2 + 80) { logs.push({ x: cx - 9, y: cy - hh / 2, w: 18, h: hh }); break; }
+        } else {
+          const r = rnd(22, 32);
+          if (Math.hypot(cx - fish.x, cy - fish.y) > r + 80) { boulders.push({ x: cx, y: cy, r, seed: Math.random() * 6, stump: t === 1 }); break; }
+        }
+      }
+    }
+    // Four springs, clear of the lures and the start spot.
+    for (let i = 0, tries = 0; i < 4 && tries < 300; tries++) {
+      const r = 60, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 60, TREES - r - 10);
+      const ok = Math.hypot(x - fish.x, y - fish.y) > r + 80 && boulders.every(b => Math.hypot(x - b.x, y - b.y) > r + b.r + 24) &&
+        springs.every(s => Math.hypot(x - s.x, y - s.y) > r + s.r + 20) &&
+        logs.every(l => x + r < l.x - 20 || x - r > l.x + l.w + 20 || y + r < l.y - 20 || y - r > l.y + l.h + 20);
+      if (ok) { springs.push({ x, y, r, water: 35 }); i++; }
+    }
+    const nest = { x: river.base + 190, y: 230 }, P = BOSS_PHASE[1];
+    const bird = (kind, phase) => ({ kind, boss: true, phase, t: 0, x: nest.x, y: nest.y, vx: 0, vy: 0, heading: 0, radius: P.radius });
+    boss = { feathers: 3, phase: 1, beaten: false, anger: 0, squabble: 0, blockT: 0, hintT: 0, hinted: false, squawkT: rnd(4, 8), nest,
+      great: bird('great', 'perch'), mate: bird('mate', 'idle'), harrier: bird('harrier', 'idle') };
+    boss.great.t = 2.2; boss.harrier.t = rnd(5, 7);
+    eagles = [boss.great, boss.mate, boss.harrier]; // all in the list, so drawing, catching and standing down just work
+    buildFinaleScenery('autumn');
+    shownFeathers = -1; updateFeathers();
+  }
+  // The arena's look for a phase: ground, grass, leaves, snow and trees (and the weather) are rebuilt.
+  function buildFinaleScenery(look) {
+    bossLook = look;
+    const snowy = look === 'snow', stormy = look === 'storm';
+    fall = snowy ? 1 : stormy ? 0.55 : 0.8;
+    cover = snowy ? 1 : 0; snow = snowy ? 0.7 : 0; snowfall = 0;
+    bossGround = snowy ? '#a2946a' : stormy ? '#5f7a46' : '#7c9c52';
+    const LEAFS = snowy ? ['#7a6448', '#6a553c', '#8a7255'] : LEAF_COLORS;
+    leaves = Array.from({ length: Math.round(70 * WW / 600 * (snowy ? 0.15 : stormy ? 0.8 : 0.5)) }, () => {
+      const y = rnd(-100, WH + 100);
+      return { x: rnd(shoreAt(y) + 14, WW + 300), y, a: rnd(0, 6), c: pickOne(LEAFS) };
+    });
+    const GREENS = ['#4a7530', '#3f6a2a', '#5a8a38', '#9cbd5c'], STRAWS = ['#c2a654', '#d4b862', '#a88c3e'];
+    const DEADS = ['#7a6a44', '#8a7a50', '#6a5a3a'], DEEPS = ['#3c6a2a', '#32602a', '#477a30', '#6a9a3e'];
+    grass = {};
+    const tufts = Math.round(WW / 600 * 520 * (snowy ? 0.12 : 1));
+    for (let i = 0; i < tufts; i++) {
+      const y = rnd(-60, WH + 60), x = rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && Math.random() < 0.55;
+      for (let b = 3 + Math.floor(Math.random() * 4); b > 0; b--) {
+        const c = pickOne(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
+        (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * (snowy ? 0.45 : 1) });
+      }
+    }
+    for (const c in grass) grass[c].sort((p, q) => p.x - q.x);
+    drifts = snowy ? Array.from({ length: Math.round(WW / 600 * 44) }, () => {
+      const y = rnd(-100, WH + 100);
+      return { x: rnd(shoreAt(y) + 10, WW + 300), y, rx: rnd(26, 60) * 1.8, ry: rnd(16, 34) * 1.8, a: rnd(0, 3) };
+    }) : [];
+    for (const d of drifts) buildDriftPaths(d);
+    snowGrain = snowy ? makeSnowGrain() : null;
+    buildTrees(); buildCrown();
+    weather = stormy ? 'thunder' : 'clear';
+    if (stormy) windDir = Math.random() < 0.5 ? -1 : 1;
+  }
+  // The cottonwood's crown as one sprite (bare in the winter phase).
+  function buildCrown() {
+    const r = 140, side = Math.ceil(r * 2.7), c = document.createElement('canvas');
+    c.width = c.height = side;
+    const g = c.getContext('2d');
+    g.translate(side / 2, side / 2);
+    const t = makeTree(0, 0, r, 0, true);
+    (t.bare ? paintBareTree : paintTree)(g, t);
+    bossCrown = { canvas: c, side };
+  }
+  function updateFeathers() {
+    const n = boss ? boss.feathers : -1;
+    if (n === shownFeathers) return;
+    shownFeathers = n;
+    ui.feathers.hidden = n < 0;
+    if (n < 0) return;
+    let html = '';
+    for (let i = 0; i < 3; i++) html += '<svg viewBox="0 0 24 24" class="' + (i < n ? 'on' : 'off') + '"><path d="M21 3C11 3 5 9 5 17l-2 4 3.4-1.6C15 19 21 14 21 3z"/></svg>';
+    ui.feathers.innerHTML = html;
+  }
+  function faceMove(e, px, py, dt) {
+    const mx = e.x - px, my = e.y - py;
+    if (Math.hypot(mx, my) > 0.5 && Math.hypot(mx, my) < 200) e.heading = (e.heading || 0) + angleDiff(Math.atan2(my, mx) + Math.PI / 2, e.heading || 0) * Math.min(1, dt * 10);
+  }
+  function startBossDive() {
+    const B = boss, P = BOSS_PHASE[B.phase], g = B.great, m = B.mate;
+    const aim = eagleAim(0.15), R = P.radius;
+    // If a buffered flop has the trout mid-hop, the warning starts when it lands (as for every eagle).
+    const air = fish.z > 0 || fish.vz > 0;
+    const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
+    g.phase = 'lock'; g.tx = aim.x; g.ty = aim.y; g.radius = R; g.hold = tLand; g.t = g.lockDur = P.warn + tLand;
+    tone(1000, 0.32, 'square', 0.05, 0.8); announce('The Great Eagle dives!');
+    if (P.mate) { // the mate's ring drops to one side, so the pair cuts off one way out
+      const hd = Math.hypot(fish.vx, fish.vy) > 5 ? Math.atan2(fish.vy, fish.vx) : rnd(0, 6.283), side = Math.random() < 0.5 ? -1 : 1, off = R * 1.25;
+      m.phase = 'lock'; m.radius = 78; m.tx = aim.x - Math.sin(hd) * off * side; m.ty = aim.y + Math.cos(hd) * off * side;
+      m.x = m.tx + 320; m.y = m.ty - 200; m.t = m.lockDur = g.t;
+    }
+    if (!B.hinted && B.phase === 1) { B.hinted = true; B.hintT = 5; }
+  }
+  function enterBossPhase(p) {
+    const B = boss, P = BOSS_PHASE[p];
+    B.phase = p; B.anger = 0;
+    bossFlash = 1; bossFlashColor = p === 2 ? '232,240,255' : '150,160,200';
+    buildFinaleScenery(P.look);
+    seasonName = P.name + (P.title ? ' \u2014 ' + P.title : ''); seasonTimer = SEASON_TIME;
+    announce(seasonName + '.');
+  }
+  // The dive lands on a lure: the Great Eagle slams into it, loses a feather, and the fight moves on.
+  function bossStun(lure) {
+    const B = boss, g = B.great;
+    lure.used = true;
+    g.x = g.tx; g.y = g.ty; g.phase = 'stun'; g.t = 1.5;
+    B.feathers--; B.anger = 0; updateFeathers();
+    burst(g.x, g.y, 18, '#efe6cf', 230); burst(g.x, g.y, 10, '#b88a4a', 170);
+    tone(150, 0.4, 'sawtooth', 0.1, 0.4); tone(1700, 0.12, 'square', 0.04, 0.5);
+    if (B.feathers <= 0) { B.beaten = true; bossFlash = 1; bossFlashColor = '255,244,200'; announce('The Great Eagle is beaten! The river is open.'); }
+    else enterBossPhase(B.phase + 1);
+  }
+  function resolveBossDive() {
+    const B = boss, g = B.great, m = B.mate, reach = EAGLE.reachZ;
+    const hitG = Math.hypot(fish.x - g.tx, fish.y - g.ty) < g.radius && fish.z < reach;
+    const hitM = m.phase === 'lock' && Math.hypot(fish.x - m.tx, fish.y - m.ty) < m.radius && fish.z < reach;
+    if (hitG) { g.x = g.tx; g.y = g.ty; g.phase = 'carry'; eagleCatcher = g; lose('great'); return; }
+    if (hitM) { m.x = m.tx; m.y = m.ty; m.phase = 'carry'; eagleCatcher = m; lose('eagle'); return; }
+    if (m.phase === 'lock') eagleLeave(m);
+    const lure = lureAt(g.tx, g.ty);
+    if (lure) bossStun(lure);
+    else { B.anger = Math.min(3, B.anger + 1); eagleLeave(g); } // a miss on open ground angers it: the next dive comes sooner
+  }
+  function updateBoss(dt) {
+    const B = boss, P = BOSS_PHASE[B.phase], g = B.great, m = B.mate, hr = B.harrier;
+    if (B.hintT > 0) B.hintT -= dt;
+    if (B.blockT > 0) B.blockT -= dt;
+    if (B.squabble > 0) B.squabble -= dt;
+    B.squawkT -= dt;
+    if (B.squawkT <= 0) { B.squawkT = rnd(6, 11); tone(1900, 0.09, 'square', 0.03, 0.4); } // the eaglets
+    const gx = g.x, gy = g.y, mx = m.x, my = m.y, hx = hr.x, hy = hr.y;
+    if (g.phase === 'perch') {
+      g.t -= dt; g.x = B.nest.x; g.y = B.nest.y;
+      if (g.t <= 0) { g.phase = 'circle'; g.ang = rnd(0, 6.283); g.dir = Math.random() < 0.5 ? -1 : 1; g.t = g.circleDur = P.circle + 0.6; }
+    } else if (g.phase === 'idle') { // resting out of sight
+      g.t -= dt;
+      if (g.t <= 0 && B.squabble <= 0) {
+        g.phase = 'circle'; g.t = g.circleDur = P.circle; g.dir = Math.random() < 0.5 ? -1 : 1;
+        g.x = fish.x + rnd(-250, 250); g.y = spawnY(120); g.ang = Math.atan2(g.y - fish.y, g.x - fish.x);
+      }
+    } else if (g.phase === 'circle') { // spirals in on the trout, then dives once it is on the ground
+      const k = 1 - Math.max(0, g.t) / g.circleDur, r = 170 + (80 - 170) * k;
+      g.ang += g.dir * 3.0 * dt;
+      g.x += (fish.x + Math.cos(g.ang) * r - g.x) * Math.min(1, dt * 6); g.y += (fish.y + Math.sin(g.ang) * r - g.y) * Math.min(1, dt * 6);
+      g.t -= dt;
+      if (g.t <= 0 && troutLanded()) startBossDive();
+    } else if (g.phase === 'lock') {
+      if (g.hold > 0) g.hold -= dt;
+      else if (P.steer > 0 && g.t > 0.4) { // the ring drifts after the trout, then commits for the last 0.4 s
+        const dx = fish.x - g.tx, dy = fish.y - g.ty, d = Math.hypot(dx, dy) || 1, step = Math.min(P.steer * dt, d);
+        g.tx += dx / d * step; g.ty += dy / d * step;
+      }
+      g.x += (g.tx - g.x) * Math.min(1, dt * 14); g.y += (g.ty - g.y) * Math.min(1, dt * 14);
+      if (m.phase === 'lock') { m.x += (m.tx - m.x) * Math.min(1, dt * 9); m.y += (m.ty - m.y) * Math.min(1, dt * 9); m.t = g.t; }
+      g.t -= dt;
+      if (g.t <= 0) resolveBossDive();
+    } else if (g.phase === 'stun') {
+      g.t -= dt;
+      if (g.t <= 0) { if (B.beaten) g.phase = 'exit'; else eagleLeave(g); }
+    } else if (g.phase === 'exit') { // flies off to the nest
+      const dx = B.nest.x - g.x, dy = B.nest.y - g.y, d = Math.hypot(dx, dy) || 1;
+      g.x += dx / d * Math.min(d, 520 * dt); g.y += dy / d * Math.min(d, 520 * dt);
+      if (d < 14) g.phase = 'off';
+    } else if (g.phase === 'squabble') { // it flies to the spot, then a flapping tussle with the osprey: no diving
+      const sp = B.spot, dx = sp.x - g.x, dy = sp.y - g.y, d = Math.hypot(dx, dy) || 1;
+      if (!g.arrived) {
+        g.x += dx / d * Math.min(d, 640 * dt); g.y += dy / d * Math.min(d, 640 * dt);
+        if (d < 18) g.arrived = true;
+      } else { g.t -= dt; if (g.t <= 0) { g.phase = 'idle'; g.t = 0.5; } }
+    } else if (g.phase === 'leave') {
+      g.x += g.vx * dt; g.y += g.vy * dt; g.t -= dt;
+      if (g.t <= 0) { g.phase = 'idle'; g.t = Math.max(0.8, P.rest - 0.3 * B.anger) + rnd(0, 0.5); }
+    }
+    if (m.phase === 'leave') { m.x += m.vx * dt; m.y += m.vy * dt; m.t -= dt; if (m.t <= 0) m.phase = 'idle'; }
+    if (P.harrier && !B.beaten) { // the osprey harasses the Great Eagle every so often
+      if (hr.phase === 'idle') {
+        hr.t -= dt;
+        if (hr.t <= 0 && (g.phase === 'idle' || g.phase === 'circle')) {
+          B.spot = { x: Math.max(shoreAt(fish.y) + 80, Math.min(TREES - 20, fish.x + rnd(-200, 200))), y: rnd(TOP + 90, BOTTOM - 90) };
+          if (g.phase === 'idle') { g.x = B.spot.x + rnd(-250, 250); g.y = spawnY(140); } // it flies in from off screen, no pop
+          g.phase = 'squabble'; g.t = 99; g.arrived = false;
+          hr.phase = 'swoop'; hr.x = B.spot.x + rnd(-200, 200); hr.y = spawnY(120);
+        }
+      } else if (hr.phase === 'swoop') {
+        const dx = B.spot.x - hr.x, dy = B.spot.y - hr.y, d = Math.hypot(dx, dy) || 1;
+        hr.x += dx / d * Math.min(d, 700 * dt); hr.y += dy / d * Math.min(d, 700 * dt);
+        if (d < 30 && g.arrived) { hr.phase = 'squabble'; hr.t = 1.6; hr.ang = 0; B.squabble = 1.6; g.t = 1.6; } // the tussle: about 1.6 s
+      } else if (hr.phase === 'squabble') {
+        hr.ang += 6 * dt; hr.x = g.x + Math.cos(hr.ang) * 46; hr.y = g.y + Math.sin(hr.ang) * 46; hr.t -= dt;
+        if (hr.t <= 0) { eagleLeave(hr); }
+      } else if (hr.phase === 'leave') {
+        hr.x += hr.vx * dt; hr.y += hr.vy * dt; hr.t -= dt;
+        if (hr.t <= 0) { hr.phase = 'idle'; hr.t = rnd(7, 9); }
+      }
+    }
+    faceMove(g, gx, gy, dt); faceMove(m, mx, my, dt); faceMove(hr, hx, hy, dt);
+    if (hr.phase === 'squabble') hr.heading = hr.ang + Math.PI;
+  }
+  // The Great Eagle: about twice the size of the others, a pale head and a scarred yellow beak; in a stun it
+  // sits dazed on the lure with stars circling its head.
+  function drawGreat(e) {
+    const locking = e.phase === 'lock', k = locking ? Math.min(1, 1 - e.t / (e.lockDur || 1)) : 0;
+    const fit = (e.radius || 90) / 60;
+    // Wingtips meet the ring at the strike (scale 1.0 at k = 1), as for every eagle; a little bigger otherwise.
+    const sc = fit * (e.phase === 'carry' || e.phase === 'stun' ? 1.1 : e.phase === 'squabble' ? 1.25 : 1.65 - k * 0.65);
+    drawEagleRing(e);
+    // A little see-through while it hovers over its ring, so the trout can still be seen beneath it.
+    drawGreatBird(e.x, e.y, sc, e.heading || 0, locking ? 0.74 : 1, { talons: (locking && k > 0.5) || e.phase === 'carry' });
+    if (e.phase === 'stun') { // stars wheeling round its head
+      const t = reduced ? 0 : clock;
+      ctx.fillStyle = '#ffe27a';
+      for (let i = 0; i < 4; i++) {
+        const a = t * 4 + i * 1.571, sx = e.x + Math.cos(a) * 36, sy = e.y - 30 + Math.sin(a) * 9;
+        ctx.beginPath();
+        for (let p = 0; p < 10; p++) { const rr = p % 2 ? 3 : 7, aa = p * 0.628 - 1.571; p ? ctx.lineTo(sx + Math.cos(aa) * rr, sy + Math.sin(aa) * rr) : ctx.moveTo(sx + Math.cos(aa) * rr, sy + Math.sin(aa) * rr); }
+        ctx.closePath(); ctx.fill();
+      }
+    }
+  }
+  // The Great Eagle's body, from above: dark brown wings edged and streaked with lighter feathers, a white tail
+  // and head, a golden beak with a scar across it, and golden talons (`o.talons`). (x, y) is the centre, the
+  // head points toward -y after `heading`; `o.fold` narrows the wings (1 = spread). Used in the fight and the ending.
+  function drawGreatBird(x, y, sc, heading, alpha, o) {
+    o = o || {};
+    const fx = o.fold === undefined ? 1 : o.fold;
+    const wings = () => {
+      ctx.beginPath();
+      ctx.moveTo(0, -22);
+      ctx.quadraticCurveTo(14, -6, 54, -4); ctx.lineTo(60, 4); ctx.lineTo(48, 2); ctx.lineTo(52, 9); ctx.lineTo(38, 5);
+      ctx.quadraticCurveTo(14, 8, 9, 14); ctx.lineTo(13, 28); ctx.lineTo(0, 24); ctx.lineTo(-13, 28); ctx.lineTo(-9, 14);
+      ctx.quadraticCurveTo(-14, 8, -38, 5); ctx.lineTo(-52, 9); ctx.lineTo(-48, 2); ctx.lineTo(-60, 4); ctx.lineTo(-54, -4);
+      ctx.quadraticCurveTo(-14, -6, 0, -22);
+    };
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.save(); // soft shadow on the ground
+    ctx.translate(x + 7 * sc, y + 10 * sc); ctx.rotate(heading); ctx.scale(sc * fx, sc);
+    ctx.fillStyle = 'rgba(15,22,12,0.22)'; wings(); ctx.fill();
+    ctx.restore();
+    ctx.translate(x, y); ctx.rotate(heading); ctx.scale(sc * fx, sc);
+    ctx.fillStyle = '#4b3220'; wings(); ctx.fill();
+    ctx.lineJoin = 'round'; ctx.strokeStyle = '#b08658'; ctx.lineWidth = 1.7; ctx.stroke(); // pale feather edging
+    ctx.fillStyle = 'rgba(160,118,74,0.55)'; // lighter shoulders
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * 25, -1, 15, 5.5, s * 0.12, 0, 7); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(205,168,118,0.6)'; ctx.lineWidth = 1.3; ctx.beginPath(); // flight feathers
+    for (const s of [-1, 1]) for (let q = 0; q < 5; q++) { ctx.moveTo(s * (16 + q * 8), -1 + q * 0.7); ctx.lineTo(s * (27 + q * 8), 5 + q * 1.3); }
+    ctx.stroke();
+    ctx.fillStyle = '#f6f1e6'; ctx.strokeStyle = '#cbc1ad'; ctx.lineWidth = 1; // the white tail
+    ctx.beginPath(); ctx.moveTo(-8, 19); ctx.lineTo(8, 19); ctx.lineTo(12, 35); ctx.lineTo(-12, 35); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#6e4b2e'; ctx.beginPath(); ctx.ellipse(0, 4, 9, 17, 0, 0, 7); ctx.fill(); // body
+    ctx.fillStyle = 'rgba(190,150,100,0.5)'; ctx.beginPath(); ctx.ellipse(-2, 1, 3, 11, 0, 0, 7); ctx.fill();
+    if (o.talons) { // golden talons, spread
+      ctx.strokeStyle = '#f0b429'; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const s of [-1, 1]) for (let q = -1; q <= 1; q++) { ctx.moveTo(s * 6, -12); ctx.lineTo(s * 6 + q * 4 + s * 2, -22); }
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#fbf8f0'; ctx.strokeStyle = '#d6cdb8'; ctx.lineWidth = 1; // the white head
+    ctx.beginPath(); ctx.arc(0, -18, 7.5, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f0b429'; ctx.strokeStyle = '#a87812'; // the golden beak
+    ctx.beginPath(); ctx.moveTo(-4, -23); ctx.lineTo(4, -23); ctx.lineTo(0, -33); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 1.9; ctx.beginPath(); ctx.moveTo(-3.4, -24.5); ctx.lineTo(2.6, -29.5); ctx.stroke(); // the scar
+    ctx.fillStyle = '#1f1810'; ctx.beginPath(); ctx.arc(-3.6, -19, 1.3, 0, 7); ctx.arc(3.6, -19, 1.3, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+  // The nest and its two eaglets, at (cx, cy) scaled by k. `complain` has them squawking.
+  function drawNestSprite(cx, cy, k, t, complain) {
+    ctx.fillStyle = '#7a5c36'; ctx.beginPath(); ctx.arc(cx, cy, 44 * k, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#4e3820'; ctx.lineWidth = 2.2 * k; ctx.beginPath();
+    for (let q = 0; q < 22; q++) { const a = q * 0.285; ctx.moveTo(cx + Math.cos(a) * 30 * k, cy + Math.sin(a) * 30 * k); ctx.lineTo(cx + Math.cos(a + 0.7) * 50 * k, cy + Math.sin(a + 0.7) * 50 * k); }
+    ctx.stroke();
+    ctx.fillStyle = '#b79a68'; ctx.beginPath(); ctx.arc(cx, cy, 29 * k, 0, 7); ctx.fill();
+    for (let i = 0; i < 2; i++) { // two eaglets peeking out, bobbing; now and then (or all the time) a beak opens
+      const ex = cx + (i ? 11 : -12) * k, ey = cy + ((i ? 5 : -4) + Math.sin(t * 2.4 + i * 2) * 2.2) * k;
+      ctx.fillStyle = '#e6e0d2'; ctx.beginPath(); ctx.arc(ex, ey, 11 * k, 0, 7); ctx.fill();
+      ctx.fillStyle = '#2a2420'; ctx.beginPath(); ctx.arc(ex - 3.6 * k, ey - 2 * k, 1.6 * k, 0, 7); ctx.arc(ex + 3.6 * k, ey - 2 * k, 1.6 * k, 0, 7); ctx.fill();
+      const open = complain || Math.sin(t * 3 + i * 1.7) > 0.75;
+      ctx.fillStyle = '#e6b43a'; ctx.beginPath(); ctx.moveTo(ex - 3 * k, ey + 2 * k); ctx.lineTo(ex + 3 * k, ey + 2 * k); ctx.lineTo(ex, ey + (open ? 10 : 7) * k); ctx.fill();
+    }
+  }
+    // The giant cottonwood's crown (see-through, so the trout shows beneath it) and the nest in it.
+  function drawNest(sec) {
+    if (!boss || !bossCrown) return;
+    const n = boss.nest, t = reduced ? 0 : sec;
+    if (!onScreen(n.x, 200)) return;
+    ctx.globalAlpha = bossLook === 'snow' ? 0.9 : 0.62;
+    ctx.drawImage(bossCrown.canvas, n.x - bossCrown.side / 2, n.y - bossCrown.side / 2);
+    ctx.globalAlpha = 1;
+    drawNestSprite(n.x, n.y, 1, t, false);
+  }
+  // The shut river: a glowing, marching golden rope along the bank's edge.
+  function drawBarrier(sec) {
+    const t = reduced ? 0 : sec;
+    ctx.save(); ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let y = -200; y <= WH + 200; y += 10) ctx.lineTo(shoreAt(y) - 4, y);
+    ctx.strokeStyle = 'rgba(244,190,70,0.22)'; ctx.lineWidth = 16; ctx.stroke();
+    ctx.setLineDash([12, 9]); ctx.lineDashOffset = -t * 40; ctx.strokeStyle = 'rgba(250,206,92,0.95)'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.restore();
+  }
+  function drawBossFlash() {
+    if (bossFlash <= 0.01) return;
+    ctx.fillStyle = 'rgba(' + bossFlashColor + ',' + 0.8 * bossFlash + ')'; ctx.fillRect(0, 0, W, H);
+  }
+  function drawBossTexts(fs) {
+    if (!boss || mode !== 'play') return;
+    if (boss.hintT > 0) { ctx.globalAlpha = Math.min(1, boss.hintT); screenText('Lure its dive onto a rock!', W / 2, view.oy + 130 * view.s, 24 * fs); ctx.globalAlpha = 1; }
+    if (boss.blockT > 0) {
+      ctx.globalAlpha = Math.min(1, boss.blockT);
+      screenText('The river is closed', W / 2, view.oy + 190 * view.s, 24 * fs);
+      screenText('until the Great Eagle is beaten', W / 2, view.oy + 190 * view.s + 28 * fs, 17 * fs);
+      ctx.globalAlpha = 1;
+    }
+  }
+  // ---------- the ending ----------
+  // After the river is reached: a short scene (about 10 s, any tap, Space or Enter skips it): the Great Eagle
+  // lands at the nest with empty talons while the eaglets complain, then the trout swims upstream into cool,
+  // shaded water. Then the ending card: the run's stats, a way to fight again, go to a round or start over,
+  // and the credits. With reduced motion the scenes are still pictures and the whole thing is about 6 s.
+  const ENDING_LEN = 10.5;
+  const endScene = { t: 0, sq: [0, 0, 0] };
+  const endLength = () => (reduced ? 6 : ENDING_LEN);
+  function startEnding() {
+    mode = 'ending'; endScene.t = 0; endScene.sq = [0, 0, 0];
+    ui.hud.hidden = true;
+    saveStats();
+    announce('The Great Eagle returns to its nest with empty talons. You swim upstream, home.');
+  }
+  function skipEnding() { if (mode === 'ending') showEndCard(); }
+  function showEndCard() {
+    mode = 'endcard';
+    ui.hud.hidden = true; ui.over.hidden = true;
+    saveStats();
+    const rows = [['Rounds cleared', stats.rounds], ['Flops', stats.flops], ['Times lost', stats.lost], ['Time played', fmtTime(stats.ms)]];
+    $('endStats').innerHTML = rows.map(r => '<span>' + r[0] + '</span><b>' + r[1] + '</b>').join('');
+    $('endNote').textContent = 'Counted since v' + stats.since + (stats.hadProgress ? '; rounds you cleared before then are not included' : '') + '.';
+    $('endCredits').textContent = 'Trout Trot \u00b7 v' + APP_VERSION + '. For the Upper Iowa River and the trout of Decorah, Iowa. Thank you for playing.';
+    ui.end.hidden = false; endRestartBtn.textContent = 'Start over'; endRestartBtn.classList.remove('armed');
+    $('fightBtn').focus();
+    announce('You made it home. ' + stats.rounds + ' rounds cleared, ' + stats.flops + ' flops, lost ' + stats.lost + ' times, ' + fmtTime(stats.ms) + ' played.');
+  }
+  function drawFishAt(x, y, sc, angle) { // the trout, anywhere (drawFish works from the fish's own position)
+    const keep = { x: fish.x, y: fish.y, z: fish.z, lift: fish.lift, alpha: fish.alpha, angle: fish.angle, m: moisture };
+    fish.x = 0; fish.y = 0; fish.z = 0; fish.lift = 0; fish.alpha = 1; fish.angle = angle; moisture = 100;
+    ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc); drawFish(); ctx.restore();
+    fish.x = keep.x; fish.y = keep.y; fish.z = keep.z; fish.lift = keep.lift; fish.alpha = keep.alpha; fish.angle = keep.angle; moisture = keep.m;
+  }
+  function drawEnding(sec) {
+    const L = endLength(), t = Math.min(endScene.t, L), cut = L * 0.5, fs = Math.max(0.8, Math.min(1.3, W / 412));
+    const k1 = t < cut ? 1 : Math.max(0, 1 - (t - cut) / 0.8), k2 = clamp01((t - (cut - 0.8)) / 0.8);
+    const move = !reduced;
+    if (k1 > 0) { // scene one: the nest at dusk
+      ctx.globalAlpha = 1;
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#e9a860'); g.addColorStop(0.55, '#b9564a'); g.addColorStop(1, '#3b2a4c');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      const cx = W / 2, cy = H * 0.42;
+      if (bossCrown) { const s = Math.min(W * 1.6, H * 0.95); ctx.globalAlpha = 0.5; ctx.drawImage(bossCrown.canvas, cx - s / 2, cy - s / 2, s, s); }
+      ctx.globalAlpha = k1;
+      const e0 = move ? clamp01((t - 0.4) / 2.4) : 1, e = 1 - Math.pow(1 - e0, 3);
+      drawNestSprite(cx, cy, 1.7, move ? sec : 0, t > 3.2);
+      // the Great Eagle glides in and settles on the rim, wings folding, talons open and empty
+      drawGreatBird(cx + 62 * e + (1 - e) * W * 0.7, cy - 70 * e - (1 - e) * H * 0.5, 1.5 + (1 - e) * 1.6, (1 - e) * 2.2, 1,
+        { fold: 1 - 0.55 * e + (move && e0 < 1 ? 0.12 * Math.sin(t * 16) : 0), talons: true });
+      if (t > 3.2 && (!move || Math.sin(t * 5) > -0.3)) {
+        screenText('Peep!', cx - 78 * fs, cy - 70 * fs, 20 * fs); screenText('Peep peep!', cx + 52 * fs, cy + 92 * fs, 20 * fs);
+      }
+      screenText('The Great Eagle limps home,', W / 2, H * 0.80, 22 * fs); screenText('talons empty.', W / 2, H * 0.80 + 30 * fs, 22 * fs);
+    }
+    if (k2 > 0) { // scene two: upstream, cool shaded water
+      ctx.globalAlpha = k2;
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#1d555b'); g.addColorStop(1, '#4a9d98');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = 'rgba(225,242,238,0.2)'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.beginPath(); // the current
+      for (let i = 0; i < 16; i++) { const x = (i * 71 + 30) % W, y = ((move ? sec * 70 : 0) + i * 97) % (H + 80) - 40; ctx.moveTo(x, y); ctx.lineTo(x + Math.sin(i) * 6, y + 56); }
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(8,34,30,0.4)'; // shade from the willows overhead
+      for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.ellipse((i * 137 + 60) % W, ((move ? sec * 18 : 0) + i * 210) % (H + 300) - 150, 130, 85, 0, 0, 7); ctx.fill(); }
+      const q = clamp01((t - cut) / (L - cut));
+      drawFishAt(W / 2 + (move ? Math.sin(sec * 1.8) * 16 : 0), H * 0.78 - q * H * 0.28, 2.1, -Math.PI / 2 + (move ? Math.sin(sec * 1.8) * 0.12 : 0));
+      screenText('Upstream, the water', W / 2, H * 0.88, 22 * fs); screenText('is cool and shaded.', W / 2, H * 0.88 + 30 * fs, 22 * fs);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- storm rounds: gusts, whiteouts, lightning ----------
+  function updateSquall(dt) {
+    const Q = squall, sev = Q.sev, peak = 240 + 140 * sev; // peak push, units/s (summer's wind is 110)
+    // --- gusts: calm, then a 1 s warning, then 1.6 s of gust
+    Q.st -= dt;
+    if (Q.state === 'calm' && Q.st <= 0) {
+      const d = GUST_DIRS[Math.floor(Math.random() * GUST_DIRS.length)];
+      Q.nx = d[0]; Q.ny = d[1]; Q.state = 'warn'; Q.st = 1.0;
+      tone(190, 0.8, 'sawtooth', 0.035, 0.55); // the whoosh
+    } else if (Q.state === 'warn' && Q.st <= 0) { Q.state = 'gust'; Q.st = 1.6; Q.wx = Q.nx; Q.wy = Q.ny; }
+    else if (Q.state === 'gust' && Q.st <= 0) { Q.state = 'calm'; Q.st = rnd(3.4, 5.2) - 1.7 * sev; }
+    const prog = Q.state === 'gust' ? 1 - Q.st / 1.6 : 0;
+    Q.env = Q.state === 'gust' ? clamp01(Math.min(prog / 0.15, (1 - prog) / 0.3)) : 0;
+    // what the weather shows: the wind vector the rain, snow and grass follow, easing toward the next gust's
+    // direction during the warning, then the gust, then back to nothing
+    const tx = Q.state === 'warn' ? Q.nx * (0.35 + 0.65 * (1 - Q.st)) : Q.state === 'gust' ? Q.wx * (0.6 + 0.4 * Q.env) : 0;
+    const ty = Q.state === 'warn' ? Q.ny * (0.35 + 0.65 * (1 - Q.st)) : Q.state === 'gust' ? Q.wy * (0.6 + 0.4 * Q.env) : 0;
+    const k = Math.min(1, dt * 5);
+    Q.vx += (tx - Q.vx) * k; Q.vy += (ty - Q.vy) * k;
+    Q.vsx = flip ? -Q.vx : Q.vx; Q.vsy = Q.vy;
+    // --- what a gust does to the trout
+    if (Q.env > 0) {
+      if (fish.z > 0 || fish.vz > 0) { // in the air: shoved
+        fish.x += Q.wx * peak * Q.env * dt; fish.y += Q.wy * peak * Q.env * dt;
+      } else if (onIce()) { // on winter ice: pushed along the ground, so it slides
+        const acc = (150 + 90 * sev) * Q.env;
+        fish.vx += Q.wx * acc * dt; fish.vy += Q.wy * acc * dt;
+      }
+      fish.x = Math.min(fish.x, TREES - FR); fish.y = Math.max(TOP, Math.min(fish.y, BOTTOM)); // never out of bounds
+    }
+    // --- snowstorm: whiteout surges
+    if (Q.ice) {
+      Q.whiteT -= dt;
+      if (Q.whiteT <= 0) { Q.whiteAge = 0; Q.whiteT = rnd(10, 15) - 4 * sev; }
+      Q.whiteAge += dt;
+      const a = Q.whiteAge; // rise 0.7 s, hold 1.0 s, fall 1.3 s
+      Q.whiteEnv = a < 0.7 ? a / 0.7 : a < 1.7 ? 1 : a < 3.0 ? 1 - (a - 1.7) / 1.3 : 0;
+    }
+    // --- thunderstorm: lightning strikes with a warning ring
+    if (!Q.ice) {
+      const S = Q.strike;
+      if (S.bolt > 0) S.bolt -= dt;
+      if (S.phase === 'idle') {
+        S.next -= dt;
+        if (S.next <= 0 && troutLanded()) { // like every ring in the game: only once the trout is on the ground
+          const aim = eagleAim(0.3);
+          const air = fish.z > 0 || fish.vz > 0;
+          const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
+          S.tx = aim.x; S.ty = aim.y; S.hold = tLand; S.phase = 'warn'; S.t = S.lockDur = 1.0 - 0.1 * sev + tLand;
+          tone(1500, 0.18, 'triangle', 0.04, 0.7); announce('Lightning!');
+        }
+      } else {
+        S.t -= dt;
+        if (S.t <= 0) { // the strike
+          S.phase = 'idle'; S.next = Math.max(2.5, rnd(5.5, 8) - 3 * sev); S.bolt = 0.3;
+          lightning.glow = 1; lightning.echo = 0.14;
+          burst(S.tx, S.ty, 14, '#fff3a8', 260); tone(70, 0.6, 'sawtooth', 0.08, 0.5);
+          if (Math.hypot(fish.x - S.tx, fish.y - S.ty) < STRIKE_R && fish.z < EAGLE.reachZ) lose('lightning');
+        }
+      }
+    }
+  }
+  // The lightning warning ring (yellow-white with a dark underlay, unlike the red bird rings) and the bolt itself.
+  function drawStrike() {
+    if (!squall || squall.ice || mode !== 'play') return;
+    const S = squall.strike;
+    ctx.save(); worldTransform();
+    if (S.phase === 'warn') {
+      const k = Math.min(1, 1 - S.t / S.lockDur);
+      ctx.fillStyle = 'rgba(255,244,150,' + (0.1 + 0.14 * k) + ')'; ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(30,38,80,0.55)'; ctx.lineWidth = 6; ctx.setLineDash([8, 6]);
+      ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,232,90,' + (0.55 + 0.4 * k) + ')'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (S.bolt > 0) { // a jagged bolt from the sky to where the strike landed
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const [w, c] of [[9, 'rgba(255,244,170,0.55)'], [3, '#ffffff']]) {
+        ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(S.tx + 30, S.ty - 520);
+        for (let i = 1; i <= 10; i++) ctx.lineTo(S.tx + 30 - i * 3 + Math.sin(i * 2.7 + S.tx) * 22 * (1 - i / 11), S.ty - 520 + i * 52);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   // ---------- dusk and the raccoon ----------
@@ -2085,7 +2760,7 @@ button { touch-action: manipulation; }
       const x = farAt(c.y) + c.dx - 30;
       ctx.fillStyle = 'rgba(30,40,20,0.3)'; ctx.beginPath(); ctx.arc(x + 5, c.y + 6, c.r, 0, 7); ctx.fill();
       ctx.fillStyle = c.c; ctx.beginPath(); ctx.arc(x, c.y, c.r, 0, 7); ctx.fill();
-      if (winter && snow > 0.05) { ctx.fillStyle = SNOW; ctx.beginPath(); ctx.arc(x - c.r * 0.25, c.y - c.r * 0.25, c.r * (0.3 + 0.45 * snow), 0, 7); ctx.fill(); }
+      if (coldNow() && snow > 0.05) { ctx.fillStyle = SNOW; ctx.beginPath(); ctx.arc(x - c.r * 0.25, c.y - c.r * 0.25, c.r * (0.3 + 0.45 * snow), 0, 7); ctx.fill(); }
     }
   }
 
@@ -2178,7 +2853,7 @@ button { touch-action: manipulation; }
     for (let y = l.y + 12; y < l.y + l.h - 6; y += 16) { ctx.beginPath(); ctx.moveTo(l.x + 3, y); ctx.lineTo(l.x + l.w - 4, y + 5); ctx.stroke(); }
     ctx.fillStyle = '#c99b66';
     ctx.beginPath(); ctx.ellipse(l.x + l.w / 2, l.y, l.w / 2, 5, 0, 0, 7); ctx.fill();
-    if (winter && snow > 0.02) { // snow along the top of the log, widening as it builds
+    if (coldNow() && snow > 0.02) { // snow along the top of the log, widening as it builds
       ctx.fillStyle = SNOW;
       ctx.fillRect(l.x + 2, l.y + 3, Math.max(3, (l.w - 4) * Math.min(1, 0.25 + snow)), l.h - 6);
     }
@@ -2186,6 +2861,16 @@ button { touch-action: manipulation; }
 
   function drawBoulder(b) {
     ctx.fillStyle = 'rgba(30,40,20,0.3)'; ctx.beginPath(); ctx.arc(b.x + 5, b.y + 6, b.r, 0, 7); ctx.fill();
+    if (b.used) b.crackSeed = b.crackSeed || 1;
+    if (b.stump) { // a tree stump: bark, a pale cut top and growth rings
+      ctx.fillStyle = '#6b4c2e'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+      ctx.fillStyle = '#d2b07a'; ctx.beginPath(); ctx.arc(b.x - 1, b.y - 1, b.r * 0.82, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(110,76,40,0.6)'; ctx.lineWidth = 1.2;
+      for (const f of [0.6, 0.38, 0.18]) { ctx.beginPath(); ctx.arc(b.x - 1, b.y - 1, b.r * f, 0, 7); ctx.stroke(); }
+      if (coldNow() && snow > 0.02) { ctx.fillStyle = SNOW; ctx.beginPath(); ctx.ellipse(b.x - b.r * 0.1, b.y - b.r * 0.15, b.r * 0.6, b.r * 0.45, -0.5, 0, 7); ctx.fill(); }
+      if (b.used) drawCracks(b.x, b.y, b.r);
+      return;
+    }
     ctx.fillStyle = '#cdc6b6'; ctx.beginPath();
     for (let i = 0; i < 9; i++) {
       const a = i / 9 * Math.PI * 2, rr = b.r * (0.86 + 0.14 * Math.sin(a * 3 + b.seed));
@@ -2197,10 +2882,30 @@ button { touch-action: manipulation; }
     ctx.beginPath(); ctx.moveTo(b.x - b.r * 0.6, b.y - b.r * 0.1); ctx.lineTo(b.x + b.r * 0.5, b.y - b.r * 0.25);
     ctx.moveTo(b.x - b.r * 0.4, b.y + b.r * 0.35); ctx.lineTo(b.x + b.r * 0.6, b.y + b.r * 0.2); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.25, 0, 7); ctx.fill();
-    if (winter && snow > 0.02) { // snow cap, growing over the winter
+    if (coldNow() && snow > 0.02) { // snow cap, growing over the winter
       ctx.fillStyle = SNOW;
       ctx.beginPath(); ctx.ellipse(b.x - b.r * 0.15, b.y - b.r * 0.2, b.r * (0.4 + 0.45 * snow), b.r * (0.3 + 0.4 * snow), -0.5, 0, 7); ctx.fill();
     }
+  }
+
+  // A faint dashed golden outline LURE_PAD out from each lure that still works: the ring's centre has to be inside it.
+  function drawLureZones() {
+    if (!boss || boss.beaten) return;
+    ctx.strokeStyle = 'rgba(250,206,92,0.5)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    for (const b of boulders) if (!b.used && onScreen(b.x, b.r + LURE_PAD + 4)) { ctx.moveTo(b.x + b.r + LURE_PAD, b.y); ctx.arc(b.x, b.y, b.r + LURE_PAD, 0, 7); }
+    for (const l of logs) if (!l.used && onScreen(l.x + l.w / 2, l.w / 2 + LURE_PAD + 4)) {
+      const x0 = l.x - LURE_PAD, y0 = l.y - LURE_PAD, w = l.w + 2 * LURE_PAD, hh = l.h + 2 * LURE_PAD, r = LURE_PAD;
+      ctx.moveTo(x0 + r, y0); ctx.arcTo(x0 + w, y0, x0 + w, y0 + hh, r); ctx.arcTo(x0 + w, y0 + hh, x0, y0 + hh, r); ctx.arcTo(x0, y0 + hh, x0, y0, r); ctx.arcTo(x0, y0, x0 + w, y0, r); ctx.closePath();
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // Cracks across a lure the Great Eagle has hit.
+  function drawCracks(x, y, r) {
+    ctx.strokeStyle = '#2b2418'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x - r * 0.7, y - r * 0.5); ctx.lineTo(x - r * 0.1, y - r * 0.05); ctx.lineTo(x + r * 0.15, y + r * 0.45); ctx.lineTo(x + r * 0.6, y + r * 0.7);
+    ctx.moveTo(x - r * 0.1, y - r * 0.05); ctx.lineTo(x + r * 0.55, y - r * 0.3); ctx.stroke();
   }
 
   // ---------- forest ----------
@@ -2230,13 +2935,14 @@ button { touch-action: manipulation; }
   // Spring: new leaves are a pale yellow-green; wild plum flowers are white and blush pink.
   const SPRING_LEAF = ['#b9d466', '#a8cc58', '#c6dc72'];
   const BLOSSOM = ['#fbf4f2', '#f6e3e8', '#ffffff', '#efd2dc'];
-  function makeTree(x, y, r, dim) {
-    const sp = pickSpecies();
+  function makeTree(x, y, r, dim, hardwood) {
+    let sp = pickSpecies();
+    while (hardwood && sp.evergreen) sp = pickSpecies(); // the finale's big cottonwood is never a pine
     // How far this tree has turned this round: 0 = summer green, 1 = full fall color.
     const turned = sp.evergreen ? 0 : clamp01((fall - sp.turn[0]) / (sp.turn[1] - sp.turn[0]));
     // In spring each hardwood leafs out on its own schedule (`leafy`: 0 = bare, 1 = full leaf, a bare
     // one showing buds as the weeks go on), and a few are wild plums in flower while the bloom lasts.
-    let bare = winter && !sp.evergreen, buds = 0, plum = false, leafy = 1;
+    let bare = coldNow() && !sp.evergreen, buds = 0, plum = false, leafy = 1;
     if (season === 'spring' && !sp.evergreen) {
       leafy = clamp01((spring.leafOut - rnd(0, 0.45)) / 0.35);
       plum = spring.blossom > 0.1 && Math.random() < 0.14;
@@ -2345,8 +3051,8 @@ button { touch-action: manipulation; }
     const g = c.getContext('2d');
     g.scale(k, k); g.translate(-x0, -y0);
     const floor = g.createLinearGradient(TREES - 20, 0, TREES + 90, 0);
-    const shade = winter ? '70,72,80' : '60,80,40'; // cool shade on snow, green shade on grass
-    floor.addColorStop(0, 'rgba(' + shade + ',0)'); floor.addColorStop(1, 'rgba(' + shade + ',' + (winter ? 0.35 : 0.6) + ')');
+    const shade = coldNow() ? '70,72,80' : '60,80,40'; // cool shade on snow, green shade on grass
+    floor.addColorStop(0, 'rgba(' + shade + ',0)'); floor.addColorStop(1, 'rgba(' + shade + ',' + (coldNow() ? 0.35 : 0.6) + ')');
     g.fillStyle = floor; g.fillRect(TREES - 20, y0, x1 - TREES + 20, y1 - y0);
     // Rows from deep in the woods out to the bank edge: farther rows are smaller and darker.
     const rows = [
@@ -2565,9 +3271,9 @@ button { touch-action: manipulation; }
     const s = sky();
     if (!s.haze || mode === 'title') return;
     if (s.dim) { ctx.fillStyle = 'rgba(30,40,55,' + s.dim + ')'; ctx.fillRect(0, 0, W, H); } // a darker sky
-    const p = toScreen(fish.x, fish.y), r = s.sight * view.s, tint = s.tint || '236,241,245';
+    const p = toScreen(fish.x, fish.y), r = s.sight * view.s * (1 - 0.5 * stormWhite()), tint = s.tint || '236,241,245'; // a whiteout closes the sight in
     const g = ctx.createRadialGradient(p.x, p.y, r * 0.45, p.x, p.y, r);
-    g.addColorStop(0, 'rgba(' + tint + ',0)'); g.addColorStop(1, 'rgba(' + tint + ',' + s.haze + ')');
+    g.addColorStop(0, 'rgba(' + tint + ',0)'); g.addColorStop(1, 'rgba(' + tint + ',' + Math.min(1, s.haze + 0.05 * stormWhite()) + ')');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
   function worldTransform() {
@@ -2575,13 +3281,14 @@ button { touch-action: manipulation; }
     if (flip) { ctx.translate(cam + view.w, 0); ctx.scale(-1, 1); } else ctx.translate(-cam, 0);
   }
   function drawEagle(e) {
-    if (e.phase === 'off' || e.phase === 'idle') return;
-    if (e.kind === 'osprey') { drawOsprey(e); return; }
+    if (e.phase === 'off' || e.phase === 'idle' || e.phase === 'perch') return;
+    if (e.kind === 'osprey' || e.kind === 'harrier') { drawOsprey(e); return; }
+    if (e.kind === 'great') { drawGreat(e); return; }
     const locking = e.phase === 'lock';
     const k = locking ? Math.min(1, 1 - e.t / (e.lockDur || 0.75)) : 0;
     // Size the silhouette (wingtips at ±60 when unscaled) so the wingtips land exactly on the
     // strike ring at the moment it hits: whatever the wings cover then is what gets caught.
-    const fit = dive().radius / 60;
+    const fit = (e.radius || dive().radius) / 60;
     const sc = fit * (e.phase === 'carry' ? 1.1 : 1.5 - k * 0.5);
     drawEagleRing(e);
     ctx.save();
@@ -2624,6 +3331,7 @@ button { touch-action: manipulation; }
 
   function draw(now) {
     const sec = now / 1000;
+    if (mode === 'ending' || mode === 'endcard') { drawEnding(sec); return; }
     ctx.fillStyle = groundColor(); ctx.fillRect(0, 0, W, H);
     ctx.save();
     worldTransform();
@@ -2643,8 +3351,9 @@ button { touch-action: manipulation; }
       }
     }
     for (const s of springs) drawSpring(s);
-    for (const l of logs) drawLog(l);
+    for (const l of logs) { drawLog(l); if (l.used) drawCracks(l.x + l.w / 2, l.y + l.h / 2, 24); }
     for (const b of boulders) drawBoulder(b);
+    drawLureZones();
     drawPowerup();
     if (mode !== 'title') drawFish();
     for (const h of herons) drawHeron(h);
@@ -2652,6 +3361,7 @@ button { touch-action: manipulation; }
     drawTrees();
     drawTall(sec);
     drawShadeCanopies();
+    drawNest(sec);
     for (const p of parts) {
       ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2.5));
       ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
@@ -2663,11 +3373,13 @@ button { touch-action: manipulation; }
 
     drawHaze();
     drawHeat(sec);
+    drawBossFlash();
     drawDusk();
     if (raccoon && raccoon.active && mode !== 'title') { ctx.save(); worldTransform(); drawRaccoonEyes(sec); ctx.restore(); }
     drawLightning();
     drawRain(); // under the rings, so nothing crosses a strike warning
     drawGust();
+    drawStrike();
     // Dive rings go back on top of the haze: the weather never hides a strike.
     if (sky().haze) { ctx.save(); worldTransform(); for (const e of eagles) drawEagleRing(e); ctx.restore(); }
     drawSnowfall();
@@ -2680,7 +3392,8 @@ button { touch-action: manipulation; }
       const hole = winter ? holes.reduce((b, h) => (!b || Math.hypot(h.x - fish.x, h.y - fish.y) < Math.hypot(b.x - fish.x, b.y - fish.y) ? h : b), null) : null;
       const away = hole ? Math.hypot(hole.x - fish.x, hole.y - fish.y) : fish.x - edgeAt(fish.y);
       const feet = Math.max(1, Math.round(away / 43)), name = hole ? 'Ice hole' : 'River';
-      const label = flip ? name + ' ' + feet + ' ft ▶' : '◀ ' + name + ' ' + feet + ' ft';
+      const closed = boss && !boss.beaten;
+      const label = closed ? (flip ? 'River closed ▶' : '◀ River closed') : flip ? name + ' ' + feet + ' ft ▶' : '◀ ' + name + ' ' + feet + ' ft';
       ctx.font = '800 ' + Math.round(15 * fs) + 'px Nunito, system-ui, sans-serif';
       const tw = ctx.measureText(label).width + 22, th = 30 * fs;
       const tx = flip ? W - 12 - tw : 12;
@@ -2693,15 +3406,17 @@ button { touch-action: manipulation; }
       ctx.fillText(label, tx + tw / 2, ty + th / 2 + 1);
       ctx.textBaseline = 'alphabetic';
     }
+    drawBossTexts(fs);
     if (mode === 'play' && seasonTimer > 0) {
       // Fade in over 0.4 s, hold, fade out over the last 0.5 s, in sugar-maple orange.
       ctx.globalAlpha = Math.max(0, Math.min(1, seasonTimer / 0.5, (SEASON_TIME - seasonTimer) / 0.4));
-      screenText(seasonName, W / 2, view.oy + 250 * view.s, 64 * fs, season === 'summer' ? '#f2c14e' : season === 'spring' ? '#a4e26c' : winter ? '#d6ecf7' : '#f0a03a');
+      screenText(seasonName, W / 2, view.oy + 250 * view.s, (seasonName.length > 9 ? 40 : 64) * fs, season === 'finale' ? (bossLook === 'snow' ? '#d6ecf7' : bossLook === 'storm' ? '#b8c4ff' : '#f0a03a') : season === 'summer' ? '#f2c14e' : season === 'spring' ? '#a4e26c' : winter ? '#d6ecf7' : '#f0a03a');
       ctx.globalAlpha = 1;
     } else if (mode === 'play' && bannerTimer > 0) {
       ctx.globalAlpha = Math.min(1, bannerTimer);
       screenText('Round ' + level, W / 2, view.oy + 240 * view.s, 44 * fs);
-      screenText(placeLine(), W / 2, view.oy + 240 * view.s + 34 * fs, 22 * fs);
+      const pl = placeLine(); // a long line (the storm banners) shrinks to fit
+      screenText(pl, W / 2, view.oy + 240 * view.s + 34 * fs, 22 * fs * Math.min(1, 32 / pl.length));
       ctx.globalAlpha = 1;
     }
     if (mode === 'play' && hintOn && level === 1) {

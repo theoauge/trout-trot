@@ -35,4 +35,7 @@ edit('ios/App/App.xcodeproj/project.pbxproj', [
 // npm only accepts plain numbers in a version (1.1.001 is invalid), so drop leading zeros here.
 const semver = version.split('.').concat(['0', '0']).slice(0, 3).map(part => String(Number(part))).join('.');
 edit('package.json', [[/"version": "[^"]*"/, `"version": "${semver}"`]]);
+// The label on the game's start screen: the full version string, as players see it.
+edit('../flop-home.html', [[/const APP_VERSION = '[^']*'/, `const APP_VERSION = '${version}'`]]);
 console.log(`Trout Trot is now version ${version} (build ${build}).`);
+console.log('Now run `npm run build` to copy the new version into www/index.html.');

@@ -6,7 +6,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 
 - **Read the plan before making changes.** Lay out what will change, raise anything ambiguous as questions, and wait for approval before editing game code.
 - **Team rules are in `TEAM-RULES.md`.** Read them too.
-- **Commit locally only when the owner or the director asks. Never push to GitHub.** Rebuild the app after changes, but leave commits to that explicit go-ahead. Leave `trout-trot-app/android/.idea/*` and stray preview images out of commits. Don't touch `run_android.cmd` (it isn't ours).
+- **Commit locally only when the owner or the director asks. Never push to GitHub.** Rebuild the app after changes, but leave commits to that explicit go-ahead. Leave `trout-trot-app/android/.idea/*` out of commits. Screenshots and previews go in the session's scratchpad, or are root PNGs (git-ignored); never commit them.
 - **Test before reporting:** syntax-check the game script, simulate the logic, and take screenshots for visual changes. Say plainly what wasn't verified on a real device.
 - **A "Code Review" Claude session reviews batches of changes.** Check its findings against the code before fixing, and reply with what was fixed. If its address is stale, look it up with ListAgents.
 
@@ -26,7 +26,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 ## Commands (run in `trout-trot-app/`)
 
 - `npm run build`: rebuild `www/index.html` from `flop-home.html` with bundled fonts, then `cap sync` to both native projects. Run after every game change.
-- `npm run icons` / `npm run fonts` / `npm run version:set -- <version> <build>`
+- `npm run icons` / `npm run fonts` / `npm run version:set -- <version> <build>`. Run `npm run build` after `version:set`, so `www/index.html` picks up the new version.
 
 **Quick check of the game script:**
 ```
@@ -67,6 +67,6 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
 
 ## State
 
-- **Last commit:** `v1.1.001` (first-flop start, winter snow and weather, eagle pairs, Go to round, grass, version label, team rules). Nothing is uncommitted except `android/.idea/*`, `run_android.cmd` and the preview PNGs, which stay out of commits.
+- **Last commit:** v1.1.001 cleanup on top of `v1.1.001` (readable version label, `version:set` updates the label, the device-specific `.idea/deploymentTargetSelector.xml` untracked and ignored, root PNGs ignored). Nothing is uncommitted.
 - **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding. iOS "1.1.001" is likely read as 1.1.1 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

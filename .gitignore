@@ -23,3 +23,6 @@ keystore.properties
 Thumbs.db
 desktop.ini
 .vscode/
+
+# Screenshots and previews at the repo root are scratch work, never committed
+/*.png

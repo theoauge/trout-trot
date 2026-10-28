@@ -15,7 +15,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 | Path | What it is |
 |---|---|
 | `flop-home.html` | **The game.** All HTML, CSS and JS in one file. Edit this. |
-| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.002 build 1) |
+| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.003 build 1) |
 | `trout-trot-app/www/index.html` | Generated from `flop-home.html` by `npm run build`. Never edit by hand. |
 | `trout-trot-app/scripts/` | `build-www.mjs`, `make-icons.mjs`, `fetch-fonts.mjs`, `set-version.mjs` |
 | `trout-trot-app/README.md` | App commands and the Android release steps |
@@ -63,8 +63,8 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
   - Flops weaken 4% per 10 rounds to 60% at 190 (`flopScale`), and drying slows by the same factor.
   - **Weather** per round: 75% clear, 12.5% snowing, 12.5% storm. Haze beyond 260 / 150 units of the trout. Eagles circle longer and aim worse; in storms they abort 25% of pair dives. Red rings always draw above the haze.
   - **Eagles:** 2 (one pair) in rounds 100–149, 4 (two pairs, taking turns) from 150 on. Pairs circle opposite each other, then a coin flip picks one-two or pincer.
-- **Spring (round 200+; built in stages for v1.1.002, summer follows in 1.1.003, so 300–400 stay spring for now)**
-  - Season comes from `seasonOf(n)` (autumn 1–99, winter 100–199, spring 200+); `winter` is the cheap flag for winter-only checks. `springAt(n)` gives `melt`, `green`, `leafOut`, `flood` and `blossom` (each 0–1).
+- **Spring (rounds 200–299)**
+  - Season comes from `seasonOf(n)` (autumn 1–99, winter 100–199, spring 200–299, summer 300+); `winter` is the cheap flag for winter-only checks. `springAt(n)` gives `melt`, `green`, `leafOut`, `flood` and `blossom` (each 0–1).
   - Round 200 opens with a green "Spring" banner. Leftover snow patches are gone by 205. The ground goes from mud to full green by 240; the river runs high and brown at 200 and clears by 240 (looks only). A few old brown leaves vanish by 220.
   - Flowers: bluebells 200–230, trillium 219–261, dandelions 239–300 (small ground sprites in clusters). Hardwoods start bare, bud, and leaf out one by one (all in full leaf by 250); wild plums flower white around 231–249. Cedars stay green.
   - Weather per round: mostly clear, 20% rain (light grey haze, slanting rain streaks); from round 260 a further 1 in 7 is a thunderstorm (darker, heavier haze and rain, double lightning flashes every 4–9 s). Rain and storms dry the trout 10% slower (`drain` 0.9) and change nothing else. Rain is capped at 360 drops; red dive rings draw above haze and lightning.
@@ -79,10 +79,23 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
     - Osprey (kind `'osprey'`, in the `eagles` list after the eagles): from round 210 one flies in, hovers over the trout (following it loosely), then drops a fixed ring at the hover point and plunges after `0.55 / flopScale` s (plus the time left in a hop, as for eagles). The ring never drifts, so leaving it always escapes. It rests 3–4.5 s between plunges. Two ospreys from 270, taking turns. Pale, see-through bird with a dark eye stripe; high chirp on the warning.
     - One strike warning at a time across all birds: an osprey waits for any eagle ring and the other osprey, and the eagles wait for the osprey, each with a 0.6 s gap (`ospreyBusy`, `lastEagleEnd`). Pincer rings of one pair still drop together.
   - Check rounds 1–199 with a before/after hash harness (screen set to 412x915, camera on the bank; compare runs that use the same round list) after any season change.
+- **Summer (rounds 300+; v1.1.003, round 400 is just summer for now)**
+  - "Summer" banner in warm gold at 300. Deep green grass, longer tufts, dark green trees, no fallen leaves; black-eyed Susans from 300 and purple coneflowers from 310. The river is low and clear, with a wide pale shallow edge and a few dragonflies. No mud, floes or puddles.
+  - **Heat:** drying is `summerHeat()` = ×1.15 at 300 rising to ×1.25 at 399 (so 12.65/s at 300 against spring's 11). A heat wave round adds ×1.15 and a warm shimmer tint (no haze).
+  - **Shade:** about 35 lone shade trees (one per ~115 units of bank, random heights, never on the start spot) are built per round as canopy sprites. The ground under one is a dark soft patch and a trout standing in it dries ×0.6 (`SHADE_DRAIN`); the canopy is drawn see-through over the trout. About 22% of the bank is shaded and every straight route to the river crosses some.
+  - **Weather** per round: 65% clear, 15% heat wave, 10% downpour (heavy rain, haze, drying ×0.9 and +2 moisture/s while it falls), 10% wind. Wind: gusts push a trout that is in the air sideways along the river (up to 110 units/s, about 50 units over a flop, one direction per round, `windDir`); grass bends and leaves blow the same way.
+  - Rounds 390–399: `fall` rises to 0.35, so a few trees and tufts begin to turn yellow and orange. Eagle pair and ospreys continue as in late spring; herons stay at 5.
+  - **Summer stage 2:**
+    - Shade sprites are pooled: six canopy canvases per round (about 0.8 MB, down from about 4.6 MB), each tree picking the nearest size and drawn flipped and turned. The shade hit-test still uses each tree's own radius.
+    - Tall grass: about 18 patches per bank. A trout inside one is hidden from the birds (`visibleTrout` is null): an eagle or osprey that has not dropped its ring loses track, a ring already down still strikes. Flops that start in tall grass are ×0.8 (`TALL_SLOW`). Never on the start spot.
+    - Gravel bars: 6–8 pale shoals push the water's edge out 28–50 units. `edgeAt(y)` = `shoreAt(y)` minus the bar; `inRiver`, the river hint and the drawing all use it.
+    - Floaters: 3 canoes and 4 tubers drift down the river (the old single canoe is off in summer). Landing in one bumps the trout back onto the bank (`bumpFish`, no harm). The river edge is always at least 73% clear.
+    - Dusk: 20% of summer rounds at 300 rising to 35% at 399. Dark and warm with a short sight around the trout, fireflies (none with reduced motion), weather forced clear, one eagle and no osprey.
+    - Raccoon (dusk rounds only): appears 3.5–5.5 s after the first flop from the far end of the bank with an eyeshine glint and a chitter, walks at 170 units/s (×0.55 in tall grass) straight at the trout, stays out of the river, catches a trout on the ground within 26 units ("Caught by a raccoon"). Full-power flops toward the water always escape (closest approach 199 units in tests); weak hops and standing still do not. The invisibility bubble freezes it.
 - **Dive fairness:** the red ring has a pale underlay so it reads on grass, snow and haze. A ring only drops once the trout has landed. The warning is 0.6 s in autumn and 0.45 s ÷ flop strength in winter. Rings drift slowly (80 or 130 units/s × flop strength). The aim is to keep every dive escapable; verify with a reacting-player simulation after any eagle change.
 
 ## State
 
-- **Last commit:** `v1.1.002` spring (rounds 200–299: season setup, spring look and weather, ground and river rules, osprey and spring eagles; a bolder warning ring with a pale underlay in every season; version label and native versions 1.1.002). Nothing is uncommitted.
-- **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding. iOS "1.1.001" is likely read as 1.1.1 by App Store Connect; confirm on the first TestFlight upload.
+- **Last commit:** `v1.1.003` summer (rounds 300–399: season, look, heat, shade, weather, autumn teaser, pooled shade sprites, tall grass, gravel bars, floaters, dusk and the raccoon; the river tag follows gravel bars; version label and native versions 1.1.003). Nothing is uncommitted.
+- **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding, summer frame rate (draw work is about 30–60% above late spring: tall grass blades, canopies and floaters are the likely costs) and whether summer routes feel fair now that a trout needs a spring stop on the way. iOS "1.1.003" is likely read as 1.1.3 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

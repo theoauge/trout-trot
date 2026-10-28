@@ -195,7 +195,7 @@ button { touch-action: manipulation; }
   const cv = document.getElementById('game');
   const ctx = cv.getContext('2d');
   const $ = id => document.getElementById(id);
-  const APP_VERSION = '1.1.002'; // shown on the start screen; keep in step with `npm run version:set`
+  const APP_VERSION = '1.1.003'; // shown on the start screen; keep in step with `npm run version:set`
   $('versionLabel').textContent = 'v' + APP_VERSION;
   const ui = {
     hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
@@ -225,10 +225,10 @@ button { touch-action: manipulation; }
 
   // Seasons. Rounds 1–99 are autumn, with the trees turning as the rounds go on. Rounds 100–199 are
   // winter: dead grass, bare trees and a frozen river, with snow building to round 190 and melting by 199.
-  // Rounds 200 on are spring (summer follows in a later version, so for now spring runs on to 400).
+  // Rounds 200–299 are spring; rounds 300 on are summer (round 400 is just summer for now).
   // `fall` runs from 0 to 1 across autumn; snowAt() below gives winter's snow. makeLevel sets them per round.
-  const WINTER_FROM = 100, WINTER_FULL = 199, SPRING_FROM = 200;
-  const seasonOf = n => (n < WINTER_FROM ? 'autumn' : n < SPRING_FROM ? 'winter' : 'spring');
+  const WINTER_FROM = 100, WINTER_FULL = 199, SPRING_FROM = 200, SUMMER_FROM = 300;
+  const seasonOf = n => (n < WINTER_FROM ? 'autumn' : n < SPRING_FROM ? 'winter' : n < SUMMER_FROM ? 'spring' : 'summer');
   const clamp01 = v => Math.max(0, Math.min(1, v));
   // `season` is the current round's season; `winter` is the same fact as a flag, for the many winter-only checks.
   let season = 'autumn', winter = false, fall = 0, snow = 0, cover = 0, snowfall = 0, seasonName = '';
@@ -246,6 +246,8 @@ button { touch-action: manipulation; }
     return { melt: clamp01(1 - t / 5), green: clamp01(t / 40), leafOut: clamp01(t / 50), flood: clamp01(1 - t / 40), blossom: clamp01(1 - Math.abs(n - 240) / 10) };
   }
   let springGround = '#7c9c52'; // the ground's colour this round, in spring
+  // Summer (round 300 on): the sun dries the trout 15% faster than at full strength, rising to 25% by 399.
+  const summerHeat = () => (season === 'summer' ? 1.15 + 0.1 * clamp01((level - SUMMER_FROM) / 99) : 1);
   // Winter snow, by round (each 0 to 1):
   //   cover    how much of the ground is white: 10% → 100% over rounds 100–110, 100% through 190,
   //            then melting back to 10% by 199, where it stays.
@@ -300,10 +302,40 @@ button { touch-action: manipulation; }
     return null;
   }
   const mudAt = (x, y) => mud.some(m => ((x - m.x) / m.rx) ** 2 + ((y - m.y) / m.ry) ** 2 < 1);
+  // Summer shade and wind.
+  //  shadeTrees  lone shade trees scattered all along the bank (a canopy sprite each); the ground under
+  //              one is dark, and a trout standing there dries 40% slower.
+  //  wind        on windy rounds gusts push a trout that is in the air sideways (along the river, one way
+  //              for the whole round); the grass leans and leaves blow the same way.
+  let shadeTrees = [], shadePool = [], windDir = 1;
+  // More summer: tall grass, gravel bars, drifting canoes and tubers, dusk and the raccoon.
+  //  tall      patches of tall prairie grass: a trout in one is hidden from the birds (one that has not yet
+  //            dropped its ring loses track; a ring already down still strikes) but flops out of it are x0.8.
+  //  bars      gravel bars: pale shoals that push the water's edge out into the river in places. edgeAt()
+  //            is where the water really starts, and inRiver and the drawing both use it.
+  //  floaters  canoes and tubers drifting down the river; landing in one bumps the trout back onto the bank.
+  //  dusk      about one summer round in five (more later) is dusk: dark, warm light, fireflies, a shorter
+  //            sight, one eagle and no osprey; and a raccoon that stalks the trout along the bank.
+  let tall = [], tallBlades = {}, bars = [], floaters = [], dusk = false, raccoon = null, flies = [];
+  const TALL_SLOW = 0.8;
+  const inTallGrass = (x, y) => tall.some(p => ((x - p.x) / p.rx) ** 2 + ((y - p.y) / p.ry) ** 2 < 1);
+  const barAt = y => { let b = 0; for (const s of bars) { const t = (y - s.y) / (s.len / 2); if (t > -1 && t < 1) b = Math.max(b, s.h * (1 - t * t)); } return b; };
+  const edgeAt = y => shoreAt(y) - (bars.length ? barAt(y) : 0); // where the water starts, past any gravel bar
+  const duskChance = n => 0.2 + 0.15 * clamp01((n - SUMMER_FROM) / 99);
+  const floaterPos = f => ({ x: farAt(f.y) + (edgeAt(f.y) - farAt(f.y)) * f.lane, y: f.y });
+  function floaterAt(x, y) {
+    for (const f of floaters) { const p = floaterPos(f), dx = (x - p.x) / (f.rx + 8), dy = (y - p.y) / (f.ry + 8); if (dx * dx + dy * dy < 1) return f; }
+    return null;
+  }
+  const SHADE_DRAIN = 0.6, WIND_PUSH = 110;
+  const shadeAt = (x, y) => shadeTrees.some(t => Math.hypot(x - t.x, y - t.y) < t.r * 1.1);
+  const shadeFactor = () => (shadeTrees.length && shadeAt(fish.x, fish.y) ? SHADE_DRAIN : 1);
+  const gustNow = () => (weather === 'wind' ? clamp01(0.2 + 0.8 * Math.max(0, Math.sin(clock * 0.8 + Math.sin(clock * 0.31) * 2))) : 0);
   // How much of its full show a kind of flower puts on this round (0 to 1): bluebells early (200–230),
   // trillium in the middle (219–261), dandelions later (239–300).
   const flowerShare = (kind, n) => kind === 'bluebell' ? clamp01(n <= 214 ? 1 : (231 - n) / 17)
     : kind === 'trillium' ? clamp01(Math.min((n - 218) / 8, (262 - n) / 8))
+    : kind === 'susan' ? 1 : kind === 'coneflower' ? clamp01((n - SUMMER_FROM) / 10)
     : clamp01(Math.min((n - 238) / 8, (301 - n) / 6));
   const canoe = { active: false, t: 4, x: 0, y: 0, vy: 0, off: 0, color: '#2f6b4f' };
   let eagles = [], eagleCatcher = null;
@@ -325,7 +357,7 @@ button { touch-action: manipulation; }
   // so only an ice-fishing hole will do; the trout slides across the ice to reach one.
   const holeAt = (x, y) => holes.find(h => Math.hypot(x - h.x, y - h.y) < h.r);
   // In spring, early on, floes cover stretches of the water's edge: landing on one doesn't count.
-  const inRiver = () => fish.z < 6 && (winter ? !!holeAt(fish.x, fish.y) : fish.x < shoreAt(fish.y) - 4 && !(floes.length && floeAt(fish.x, fish.y)));
+  const inRiver = () => fish.z < 6 && (winter ? !!holeAt(fish.x, fish.y) : fish.x < edgeAt(fish.y) - 4 && !(floes.length && floeAt(fish.x, fish.y)));
   const onIce = () => winter && fish.x < shoreAt(fish.y);
   // Nothing presses the trout until it makes its first flop of the round (swipe, tap or arrow
   // key): moisture stays full and the eagles hold off, so a round starts when the player is ready.
@@ -337,16 +369,19 @@ button { touch-action: manipulation; }
   // thaw brings it back smoothly, from 60% at round 200 to full strength at 250.
   const flopScale = () => winter ? 1 - 0.04 * (Math.floor((Math.min(level, WINTER_FULL) - WINTER_FROM) / 10) + 1)
     : season === 'spring' ? 0.6 + 0.4 * clamp01((level - SPRING_FROM) / 50) : 1;
-  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale() * sky().drain; // rain slows it a little
+  // Rain slows it a little; summer's sun speeds it up, and shade slows it again.
+  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale() * sky().drain * summerHeat() * shadeFactor();
   const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
 
   // ---------- level ----------
   function makeLevel(n) {
     flip = n > 1 && Math.random() < 0.5;
     season = seasonOf(n); winter = season === 'winter';
-    fall = season === 'spring' ? 0 : clamp01((n - 1) / (WINTER_FROM - 2)); // spring starts from summer green
+    // Spring and summer are green; in the last ten summer rounds (390–399) a few trees begin to turn.
+    fall = season === 'spring' ? 0 : season === 'summer' ? 0.35 * clamp01((n - 389) / 10) : clamp01((n - 1) / (WINTER_FROM - 2));
     ({ cover, depth: snow, falling: snowfall } = snowAt(n));
     spring = springAt(n);
+    dusk = season === 'summer' && Math.random() < duskChance(n); // a summer evening: darker, fewer birds, and a raccoon
     springGround = shadeHex('#8d7b57', '#7c9c52', spring.green); // mud turning to grass
     // Each round the trout lands 40 units (about 1 ft) farther from the river, up to MAX_ROUND.
     WW = 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52;
@@ -409,8 +444,8 @@ button { touch-action: manipulation; }
 
     // Fallen leaves: a few at the start of autumn, building up through the season; in winter,
     // faded brown ones that disappear under the snow; in spring, a few old brown ones that are gone by 220.
-    const spr = season === 'spring';
-    const leafShare = spr ? 0.3 * clamp01(1 - (n - SPRING_FROM) / 20) : winter ? 1 - cover : 0.15 + 0.85 * fall;
+    const spr = season === 'spring', sum = season === 'summer';
+    const leafShare = spr ? 0.3 * clamp01(1 - (n - SPRING_FROM) / 20) : winter ? 1 - cover : sum ? 0 : 0.15 + 0.85 * fall;
     leaves = Array.from({ length: Math.round(70 * WW / 600 * leafShare) }, () => {
       const y = rnd(-100, WH + 100);
       return { x: rnd(shoreAt(y) + 14, WW + 300), y, a: rnd(0, 6), c: winter || spr ? pickOne(['#7a6448', '#6a553c', '#8a7255']) : pickOne(LEAF_COLORS) };
@@ -419,9 +454,9 @@ button { touch-action: manipulation; }
     // the season goes on; in winter they're dead tan, shrinking and thinning until the snow buries them.
     grass = {};
     const GREEN = ['#4a7530', '#3f6a2a', '#5a8a38', '#9cbd5c'], STRAW = ['#c2a654', '#d4b862', '#a88c3e'];
-    const DEAD = ['#7a6a44', '#8a7a50', '#6a5a3a'];
+    const DEAD = ['#7a6a44', '#8a7a50', '#6a5a3a'], DEEP = ['#3c6a2a', '#32602a', '#477a30', '#6a9a3e'];
     // In spring the grass comes back: short and sparse, with old dead blades among the new, at 200.
-    const bladeScale = winter ? 1 - cover * 1.15 : spr ? 0.55 + 0.45 * spring.green : 1;
+    const bladeScale = winter ? 1 - cover * 1.15 : spr ? 0.55 + 0.45 * spring.green : sum ? 1.35 : 1; // summer grass is long
     const tuftCount = Math.round(WW / 600 * 520 * (winter ? clamp01(1 - cover * 0.9) : spr ? 0.45 + 0.55 * spring.green : 1));
     const deadShare = spr ? 0.7 * clamp01(1 - spring.green * 1.6) : 0;
     if (bladeScale > 0.12) {
@@ -430,7 +465,7 @@ button { touch-action: manipulation; }
         const straw = !winter && Math.random() < fall * 0.7;
         const blades = 3 + Math.floor(Math.random() * 4);
         for (let b = 0; b < blades; b++) {
-          const c = pickOne(spr ? (Math.random() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : GREEN);
+          const c = pickOne(spr ? (Math.random() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
           (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * bladeScale });
         }
       }
@@ -446,10 +481,11 @@ button { touch-action: manipulation; }
       const y = rnd(-100, WH + 100), grow = 0.35 + 0.35 * spring.melt;
       return { x: rnd(shoreAt(y) + 10, WW + 300), y, rx: rnd(26, 60) * grow, ry: rnd(16, 34) * grow, a: rnd(0, 3) };
     }) : [];
-    // Spring flowers, in small clusters: each kind blooms for its own stretch of rounds.
+    // Wildflowers, in small clusters: each kind blooms for its own stretch of rounds (summer's are black-eyed
+    // Susans and purple coneflowers).
     flowers = [];
-    if (spr) {
-      for (const kind of ['bluebell', 'trillium', 'dandelion']) {
+    if (spr || sum) {
+      for (const kind of spr ? ['bluebell', 'trillium', 'dandelion'] : ['susan', 'coneflower']) {
         const clusters = Math.round(WW / 600 * 18 * flowerShare(kind, n));
         for (let i = 0; i < clusters; i++) {
           const y = rnd(-60, WH + 60), x = rnd(shoreAt(y) + 16, WW + 300);
@@ -480,6 +516,48 @@ button { touch-action: manipulation; }
       });
     }
 
+    // Summer shade: a lone tree about every 115 units of bank, each at a random height, clear of the start
+    // spot, so shade always lies along any route to the river.
+    shadeTrees = []; shadePool = [];
+    if (sum) {
+      const x0 = river.base + 170, span = TREES - 110 - x0, nT = Math.round(span / 115);
+      // A pool of six canopy sprites shared by every tree (each tree picks the nearest size, and is drawn
+      // flipped and turned), so memory does not grow with the width of the bank.
+      shadePool = Array.from({ length: 6 }, (_, i) => buildShadeSprite(62 + i * 5.2));
+      for (let i = 0; i < nT; i++) {
+        const r = rnd(62, 88), x = x0 + span * (i + rnd(0.1, 0.9)) / nT, y = rnd(TOP + 20, BOTTOM - 20);
+        if (Math.hypot(x - fish.x, y - fish.y) > r + 90) {
+          shadeTrees.push({ x, y, r, pool: Math.min(5, Math.round((r - 62) / 5.2)), flip: Math.random() < 0.5 ? -1 : 1, rot: rnd(0, 6.283) });
+        }
+      }
+      windDir = Math.random() < 0.5 ? -1 : 1;
+    }
+    // Tall grass, gravel bars and floaters (summer).
+    tall = []; tallBlades = {}; bars = []; floaters = [];
+    if (sum) {
+      for (let i = Math.round(WW / 600 * 2.4); i > 0; i--) {
+        for (let tries = 0; tries < 12; tries++) {
+          const rx = rnd(70, 120), ry = rnd(45, 75), y = rnd(TOP + 30, BOTTOM - 30), x = rnd(shoreAt(y) + rx + 70, TREES - rx - 20);
+          if (Math.hypot(x - fish.x, y - fish.y) > Math.max(rx, ry) + 90) { tall.push({ x, y, rx, ry }); break; }
+        }
+      }
+      const TALLC = ['#4f7f2c', '#5c8c34', '#6e9b3e', '#3f6a28', '#b9a45a'];
+      for (const p of tall) {
+        for (let k = Math.round(Math.PI * p.rx * p.ry / 60); k > 0; k--) {
+          const a = rnd(0, 6.283), d = Math.sqrt(Math.random()), c = pickOne(TALLC);
+          (tallBlades[c] = tallBlades[c] || []).push({ x: p.x + Math.cos(a) * p.rx * d, y: p.y + Math.sin(a) * p.ry * d, a: rnd(-0.4, 0.4), len: rnd(24, 40) });
+        }
+      }
+      for (const c in tallBlades) tallBlades[c].sort((p, q) => p.x - q.x);
+      // Gravel bars: 6–8 shoals, each 120–220 units long and pushing the water's edge out 28–50 units.
+      for (let i = 6 + Math.floor(Math.random() * 3); i > 0; i--) bars.push({ y: rnd(TOP + 40, BOTTOM - 40), len: rnd(120, 220), h: rnd(28, 50), seed: rnd(0, 6) });
+      // Three canoes and four tubers, spread along the river, all drifting downstream.
+      for (let i = 0; i < 7; i++) {
+        const canoe = i < 3;
+        floaters.push({ kind: canoe ? 'canoe' : 'tube', y: rnd(-100, WH + 100), lane: rnd(0.2, 0.8), vy: canoe ? rnd(45, 60) : rnd(28, 40),
+          rx: canoe ? 13 : 19, ry: canoe ? 36 : 19, color: pickOne(CANOE_COLORS), seed: rnd(0, 6) });
+      }
+    }
     // Floes (rounds 200–215): up to 9 slots along the river, every third one left empty so there is
     // always a way in; the rest are filled less often, and with smaller floes, as the rounds go on.
     floes = []; floeT = 0;
@@ -524,12 +602,13 @@ button { touch-action: manipulation; }
         : shadeHex(pickOne(SUMMER), pickOne(LEAF_COLORS), clamp01(fall * 1.2 + rnd(-0.2, 0.2)))
     }));
 
-    eagles = Array.from({ length: eagleCount(n) }, (_, i) => ({ phase: 'idle', t: rnd(2.5, 4) + i * 2, x: 0, y: 0, vx: 0, vy: 0 }));
+    eagles = Array.from({ length: dusk ? Math.min(1, eagleCount(n)) : eagleCount(n) }, (_, i) => ({ phase: 'idle', t: rnd(2.5, 4) + i * 2, x: 0, y: 0, vx: 0, vy: 0 }));
     // Spring ospreys ride in the same list (kind 'osprey'), after the eagles.
-    for (let k = 0; k < ospreyCount(n); k++) eagles.push({ kind: 'osprey', phase: 'idle', t: rnd(3, 5) + k * 3, x: 0, y: 0, vx: 0, vy: 0 });
+    for (let k = 0; k < (dusk ? 0 : ospreyCount(n)); k++) eagles.push({ kind: 'osprey', phase: 'idle', t: rnd(3, 5) + k * 3, x: 0, y: 0, vx: 0, vy: 0 });
     eagleCatcher = null;
     makeTeams();
-    weather = winter ? rollWeather() : spr ? rollSpringWeather(n) : 'clear';
+    weather = winter ? rollWeather() : spr ? rollSpringWeather(n) : sum ? rollSummerWeather() : 'clear';
+    if (dusk) weather = 'clear'; // evenings are calm and clear
     // Puddles only after rain: a few, clear of the start spot and the water's edge.
     puddles = [];
     if (spr && (weather === 'rain' || weather === 'thunder')) {
@@ -540,7 +619,8 @@ button { touch-action: manipulation; }
     }
     moisture = 100; bannerTimer = 1.6;
     troutMoved = false; // the round starts on the first flop
-    seasonName = n === 1 ? 'Autumn' : n === WINTER_FROM ? 'Winter' : n === SPRING_FROM ? 'Spring' : ''; // each season's first round opens with its name
+    raccoon = dusk ? { active: false, t: rnd(3.5, 5.5), x: 0, y: 0, step: 0 } : null;
+    seasonName = n === 1 ? 'Autumn' : n === WINTER_FROM ? 'Winter' : n === SPRING_FROM ? 'Spring' : n === SUMMER_FROM ? 'Summer' : ''; // each season's first round opens with its name
     seasonTimer = seasonName ? SEASON_TIME : 0;
     cam = camTarget();
     ui.round.textContent = n;
@@ -685,7 +765,7 @@ button { touch-action: manipulation; }
   }
   function showOver() {
     mode = 'over';
-    ui.overTitle.textContent = { eagle: 'Snatched by an eagle', osprey: 'Plucked by an osprey', heron: 'Speared by a heron' }[deathBy] || 'Dried out';
+    ui.overTitle.textContent = { eagle: 'Snatched by an eagle', raccoon: 'Caught by a raccoon', osprey: 'Plucked by an osprey', heron: 'Speared by a heron' }[deathBy] || 'Dried out';
     ui.overRound.textContent = 'Round ' + level;
     ui.hud.hidden = true; ui.over.hidden = false;
     $('againBtn').focus();
@@ -727,6 +807,7 @@ button { touch-action: manipulation; }
   function launch(dx, dy, mag) {
     mag *= flopScale();
     if (mud.length && mudAt(fish.x, fish.y)) mag *= MUD_SLOW; // soft ground
+    if (tall.length && inTallGrass(fish.x, fish.y)) mag *= TALL_SLOW; // wading through tall grass
     troutMoved = true;
     const d = Math.hypot(dx, dy) || 1;
     fish.vx = dx / d * mag; fish.vy = dy / d * mag; fish.vz = 360; fish.z = 0.01;
@@ -853,7 +934,7 @@ button { touch-action: manipulation; }
   // from 150 through 199. Spring goes back to one eagle.
   // In spring it is one eagle, then one pair from round 250 (the winter pair logic, with the autumn dive).
   const EAGLE_PAIR_FROM = 250;
-  const eagleCount = n => n < EAGLE_FROM ? 0 : seasonOf(n) === 'spring' ? (n < EAGLE_PAIR_FROM ? 1 : 2)
+  const eagleCount = n => n < EAGLE_FROM ? 0 : seasonOf(n) === 'spring' || seasonOf(n) === 'summer' ? (n < EAGLE_PAIR_FROM ? 1 : 2)
     : seasonOf(n) === 'autumn' ? 1 : n < 150 ? 2 : 4;
   // From round 10 it flies in and circles 5% faster every 10 rounds, compounding, up to
   // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. The dive itself
@@ -893,7 +974,12 @@ button { touch-action: manipulation; }
     snow: { label: 'Snowing', sight: 260, haze: 0.85, circle: 0.5, aimError: 25, abort: 0, drain: 1 },
     storm: { label: 'Snowstorm', sight: 150, haze: 0.95, circle: 1, aimError: 50, abort: 0.25, drain: 1 },
     rain: { label: 'Raining', sight: 340, haze: 0.45, circle: 0, aimError: 0, abort: 0, drain: 0.9, tint: '168,182,192', dim: 0.06 },
-    thunder: { label: 'Thunderstorm', sight: 260, haze: 0.6, circle: 0, aimError: 0, abort: 0, drain: 0.9, tint: '120,134,148', dim: 0.2 }
+    thunder: { label: 'Thunderstorm', sight: 260, haze: 0.6, circle: 0, aimError: 0, abort: 0, drain: 0.9, tint: '120,134,148', dim: 0.2 },
+    // Summer: a heat wave (no haze, a bright warm tint, drying 15% faster), a downpour (heavy rain that
+    // refills the trout, `refill` moisture per second, while it falls) and a wind (see gustNow).
+    heat: { label: 'Heat wave', sight: 0, haze: 0, circle: 0, aimError: 0, abort: 0, drain: 1.15 },
+    downpour: { label: 'Downpour', sight: 300, haze: 0.5, circle: 0, aimError: 0, abort: 0, drain: 0.9, tint: '150,166,178', dim: 0.12, refill: 2 },
+    wind: { label: 'Windy', sight: 0, haze: 0, circle: 0, aimError: 0, abort: 0, drain: 1 }
   };
   let weather = 'clear';
   const sky = () => SKY[weather];
@@ -904,12 +990,15 @@ button { touch-action: manipulation; }
     const r = Math.random(), storm = n >= STORM_FROM ? 1 / 7 : 0;
     return r < storm ? 'thunder' : r < storm + 0.2 ? 'rain' : 'clear';
   };
+  // Summer rounds: mostly clear; 15% heat wave, 10% downpour, 10% wind.
+  const rollSummerWeather = () => { const r = Math.random(); return r < 0.15 ? 'heat' : r < 0.25 ? 'downpour' : r < 0.35 ? 'wind' : 'clear'; };
   // The round banner's second line: the place, plus the weather when it's snowing.
-  const placeLine = () => place + (sky().label ? ' · ' + sky().label : '');
+  const placeLine = () => place + (sky().label ? ' · ' + sky().label : '') + (dusk ? ' · Dusk' : '');
 
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
-  const visibleTrout = () => (invisible > 0 ? null : fish);
+  // Tall grass hides the trout from the birds, like a weaker invisibility bubble (see updateEagle).
+  const visibleTrout = () => (invisible > 0 || (tall.length && inTallGrass(fish.x, fish.y)) ? null : fish);
 
   // Before diving, the eagle circles the trout (for dive().circle seconds), spiralling in from 150 to 55 units.
   const EAGLE_CIRCLE = { from: 150, to: 55, spin: 3.2 };
@@ -957,7 +1046,7 @@ button { touch-action: manipulation; }
     const sk = EAGLE, fast = eagleSpeedUp();
     // When the eagle can't see the trout it flies off, and doesn't return until it can.
     if (!visibleTrout()) {
-      if (e.phase === 'track' || e.phase === 'circle' || e.phase === 'lock') eagleLeave(e);
+      if (e.phase === 'track' || e.phase === 'circle' || (e.phase === 'lock' && invisible > 0)) eagleLeave(e); // grass doesn't call off a ring already down
       if (e.phase === 'idle' && e.t <= 0) e.t = 0.5;
     }
     const px = e.x, py = e.y;
@@ -1027,14 +1116,14 @@ button { touch-action: manipulation; }
   // osprey (and a short gap, OSPREY.gap), and the eagles wait for the osprey the same way.
   const OSPREY_FROM = 210, OSPREY_TWO = 270;
   const OSPREY = { speed: 340, hover: [1.0, 1.8], warn: 0.55, radius: 56, rest: [3, 4.5], gap: 0.6 };
-  const ospreyCount = n => (seasonOf(n) !== 'spring' || n < OSPREY_FROM ? 0 : n < OSPREY_TWO ? 1 : 2);
+  const ospreyCount = n => ((seasonOf(n) !== 'spring' && seasonOf(n) !== 'summer') || n < OSPREY_FROM ? 0 : n < OSPREY_TWO ? 1 : 2);
   let lastEagleEnd = -Infinity, lastOspreyEnd = -Infinity; // when the last ring of each kind ended
   const ospreyLive = () => eagles.some(o => o.kind === 'osprey' && o.phase === 'lock');
   const eagleLive = () => eagles.some(o => o.kind !== 'osprey' && o.phase === 'lock');
   const ospreyBusy = () => ospreyLive() || clock - lastOspreyEnd < OSPREY.gap;
   function updateOsprey(o, dt) {
     o.t -= dt;
-    if (!visibleTrout() && (o.phase === 'track' || o.phase === 'hover' || o.phase === 'lock')) eagleLeave(o);
+    if (!visibleTrout() && (o.phase === 'track' || o.phase === 'hover' || (o.phase === 'lock' && invisible > 0))) eagleLeave(o);
     const px = o.x, py = o.y;
     if (o.phase === 'idle') {
       if (o.t <= 0 && visibleTrout()) { o.phase = 'track'; o.x = fish.x + rnd(-200, 200); o.y = spawnY(100); }
@@ -1152,7 +1241,7 @@ button { touch-action: manipulation; }
   const HERON_BACK = 210, ANGLERS_BACK = 205, CANOE_BACK = 240;
   const heronCount = n => {
     const s = seasonOf(n);
-    if (s === 'spring') return n < HERON_BACK ? 0 : Math.min(5, 1 + Math.floor((n - HERON_BACK) / 20));
+    if (s === 'spring' || s === 'summer') return n < HERON_BACK ? 0 : Math.min(5, 1 + Math.floor((n - HERON_BACK) / 20));
     return n < 10 || s === 'winter' ? 0 : Math.floor(n / 10);
   };
   let herons = [], heronCatcher = null;
@@ -1273,7 +1362,7 @@ button { touch-action: manipulation; }
   let drops = [];
   const lightning = { next: 4, glow: 0, echo: 0 };
   function updateRain(dt) {
-    const base = weather === 'thunder' ? 320 : weather === 'rain' ? 200 : 0;
+    const base = weather === 'thunder' ? 320 : weather === 'downpour' ? 360 : weather === 'rain' ? 200 : 0;
     const want = Math.min(360, Math.round(base * (W * H) / (412 * 915)));
     while (drops.length < want) drops.push({ x: Math.random() * W, y: Math.random() * H, vy: rnd(620, 900), len: rnd(10, 18) });
     if (drops.length > want) drops.length = want;
@@ -1290,11 +1379,36 @@ button { touch-action: manipulation; }
   }
   function drawRain() {
     if (!drops.length) return;
-    const storm = weather === 'thunder';
+    const storm = weather === 'thunder' || weather === 'downpour';
     ctx.strokeStyle = storm ? 'rgba(210,224,238,0.6)' : 'rgba(205,222,235,0.5)'; ctx.lineWidth = storm ? 1.5 : 1.2; ctx.lineCap = 'round';
     ctx.beginPath();
     for (const d of drops) { ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + d.len * 0.16, d.y - d.len); }
     ctx.stroke();
+  }
+  // Windy rounds: leaves blow along the river in the gust's direction (screen space, at most 40).
+  let gustLeaves = [];
+  function updateGust(dt) {
+    const want = weather === 'wind' ? Math.min(40, Math.round(36 * (W * H) / (412 * 915))) : 0;
+    while (gustLeaves.length < want) gustLeaves.push({ x: Math.random() * W, y: Math.random() * H, ph: rnd(0, 6), c: Math.random() < 0.5 ? '#5f8a3e' : '#8a7a4a' });
+    if (gustLeaves.length > want) gustLeaves.length = want;
+    if (reduced) return;
+    const push = windDir * (50 + 260 * gustNow());
+    for (const f of gustLeaves) {
+      f.y += push * dt; f.x += Math.sin(clock * 2 + f.ph) * 25 * dt; f.ph += dt * 2;
+      if (f.y > H + 10) f.y = -10; else if (f.y < -10) f.y = H + 10;
+      if (f.x < -10) f.x = W + 10; else if (f.x > W + 10) f.x = -10;
+    }
+  }
+  function drawGust() {
+    for (const f of gustLeaves) { ctx.fillStyle = f.c; ctx.beginPath(); ctx.ellipse(f.x, f.y, 5, 2.4, f.ph, 0, 7); ctx.fill(); }
+  }
+  // A heat wave: a bright warm wash and a few slow bands of shimmer drifting up the screen.
+  function drawHeat(sec) {
+    if (weather !== 'heat' || mode === 'title') return;
+    ctx.fillStyle = 'rgba(255,228,150,0.12)'; ctx.fillRect(0, 0, W, H);
+    if (reduced) return;
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (let i = 0; i < 6; i++) { const y = H - ((sec * 22 + i * H / 6) % (H + 60)) + 30; ctx.fillRect(0, y, W, 22 + 10 * Math.sin(sec * 1.3 + i)); }
   }
   function drawLightning() {
     if (lightning.glow <= 0.02 || weather !== 'thunder' || mode !== 'play') return; // never frozen behind the pause card
@@ -1304,7 +1418,7 @@ button { touch-action: manipulation; }
 
   function updateCanoe(dt) {
     // No paddling on a frozen river, nor on the spring flood until it clears (round 240).
-    if (winter || (season === 'spring' && level < CANOE_BACK)) { canoe.active = false; return; }
+    if (winter || season === 'summer' || (season === 'spring' && level < CANOE_BACK)) { canoe.active = false; return; } // summer has its own floaters
     if (!canoe.active) {
       canoe.t -= dt;
       if (canoe.t <= 0) {
@@ -1326,11 +1440,13 @@ button { touch-action: manipulation; }
       else if (bannerTimer > 0) bannerTimer -= dt;
     }
     updateCanoe(dt);
+    if (floaters.length) updateFloaters(dt);
     cam += (camTarget() - cam) * Math.min(1, dt * 5);
 
     if (mode === 'play') {
       fish.cooldown -= dt;
       fish.x += fish.vx * dt; fish.y += fish.vy * dt;
+      if (weather === 'wind' && (fish.z > 0 || fish.vz > 0)) fish.y += windDir * WIND_PUSH * gustNow() * dt; // gusts shove it sideways in the air
       if (fish.z > 0 || fish.vz > 0) {
         fish.vz -= GRAV * dt; fish.z += fish.vz * dt;
         if (fish.z <= 0) {
@@ -1347,6 +1463,8 @@ button { touch-action: manipulation; }
       runQueuedFlop(dt);
 
       if (troutMoved) moisture -= drainRate() * dt;
+      const refill = sky().refill; // a downpour tops the trout up while it falls
+      if (refill) moisture = Math.min(100, moisture + refill * dt);
       for (const s of springs) {
         if (fish.z === 0 && s.water > 0 && Math.hypot(fish.x - s.x, fish.y - s.y) < s.r + 4) {
           const take = Math.min(s.water, 45 * dt, 100 - moisture);
@@ -1364,9 +1482,10 @@ button { touch-action: manipulation; }
       if (floes.length) floeT += dt;
       updatePowerup(dt);
       if (troutMoved) { for (const e of eagles) updateEagle(e, dt); updateTeams(dt); }
+      if (raccoon && troutMoved) updateRaccoon(raccoon, dt);
       updateHerons(dt);
       if (mode === 'play') {
-        if (inRiver()) reachRiver();
+        if (inRiver()) { if (floaters.length && floaterAt(fish.x, fish.y)) bumpFish(); else reachRiver(); }
         else if (moisture <= 0) lose('dry');
       }
       updateHud();
@@ -1412,6 +1531,8 @@ button { touch-action: manipulation; }
     for (const r of ripples) { r.age += dt; r.y += (winter ? 0 : 50) * dt; } // still water in an ice hole
     updateSnowfall(dt);
     updateRain(dt);
+    updateGust(dt);
+    updateFlies(dt);
     ripples = ripples.filter(r => r.age < 1.4);
   }
 
@@ -1423,7 +1544,7 @@ button { touch-action: manipulation; }
   }
 
   // Autumn grass, winter's dead brown grass, or spring's mud greening over.
-  const groundColor = () => (winter ? '#a2946a' : season === 'spring' ? springGround : '#7c9c52');
+  const groundColor = () => (winter ? '#a2946a' : season === 'spring' ? springGround : season === 'summer' ? '#668f42' : '#7c9c52');
   const onScreen = (x, pad) => x > cam - pad && x < cam + view.w + pad;
   const snowColor = a => 'rgba(246,249,251,' + a + ')';
   const SNOW = snowColor(0.92);
@@ -1438,6 +1559,11 @@ button { touch-action: manipulation; }
     drawGrass(sec);
     drawFlowers();
     drawPuddles(sec);
+    drawShade();
+    for (const p of tall) { // the ground under tall grass is darker and damper
+      if (!onScreen(p.x, p.rx + 6)) continue;
+      ctx.fillStyle = 'rgba(28,66,22,0.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, p.rx, p.ry, 0, 0, 7); ctx.fill();
+    }
     for (const l of leaves) {
       if (!onScreen(l.x, 20)) continue; // only the leaves on screen
       ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
@@ -1448,6 +1574,29 @@ button { touch-action: manipulation; }
     else if (drifts.length) drawDrifts(); // spring's last patches of snow
   }
 
+  // Summer shade: a dark, soft patch under each shade tree (the canopy itself is drawn over the trout, see
+  // drawShadeCanopies), so players can see where the cool ground is.
+  function drawShade() {
+    for (const t of shadeTrees) {
+      const R = t.r * 1.2;
+      if (!onScreen(t.x, R + 6)) continue;
+      const g = ctx.createRadialGradient(t.x, t.y, R * 0.2, t.x, t.y, R);
+      g.addColorStop(0, 'rgba(14,32,12,0.5)'); g.addColorStop(0.75, 'rgba(14,32,12,0.4)'); g.addColorStop(1, 'rgba(14,32,12,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(t.x, t.y, R, 0, 7); ctx.fill();
+    }
+  }
+  function drawShadeCanopies() {
+    if (!shadeTrees.length) return;
+    ctx.globalAlpha = 0.6; // see-through, so the trout under a tree stays visible
+    for (const t of shadeTrees) {
+      if (!onScreen(t.x, t.r * 1.4 + 6)) continue;
+      const sp = shadePool[t.pool], k = t.r / sp.r;
+      ctx.save(); ctx.translate(t.x, t.y); ctx.rotate(t.rot); ctx.scale(t.flip * k, k);
+      ctx.drawImage(sp.canvas, -sp.side / 2, -sp.side / 2);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
   // Mud: dark wet-brown patches with a faint sheen. Puddles: still, shallow water with a slow ripple.
   function drawMud() {
     for (const m of mud) {
@@ -1484,6 +1633,14 @@ button { touch-action: manipulation; }
         ctx.fillStyle = '#fbf8f2';
         for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.ellipse(f.x, f.y, 5, 2.6, f.a + k * 2.094, 0, 7); ctx.fill(); }
         ctx.fillStyle = '#e6c54a'; ctx.beginPath(); ctx.arc(f.x, f.y, 1.5, 0, 7); ctx.fill();
+      } else if (f.kind === 'susan') { // black-eyed Susan: yellow petals round a dark brown eye
+        ctx.fillStyle = '#f2b81c';
+        for (let k = 0; k < 6; k++) { ctx.beginPath(); ctx.ellipse(f.x + Math.cos(f.a + k * 1.047) * 3.6, f.y + Math.sin(f.a + k * 1.047) * 3.6, 3.2, 1.5, f.a + k * 1.047, 0, 7); ctx.fill(); }
+        ctx.fillStyle = '#3d2a1a'; ctx.beginPath(); ctx.arc(f.x, f.y, 2.2, 0, 7); ctx.fill();
+      } else if (f.kind === 'coneflower') { // purple coneflower: drooping pink-purple petals, a rusty cone
+        ctx.fillStyle = '#c45f9e';
+        for (let k = 0; k < 7; k++) { ctx.beginPath(); ctx.ellipse(f.x + Math.cos(f.a + k * 0.898) * 4.2, f.y + Math.sin(f.a + k * 0.898) * 4.2, 3.6, 1.3, f.a + k * 0.898, 0, 7); ctx.fill(); }
+        ctx.fillStyle = '#8a4a22'; ctx.beginPath(); ctx.arc(f.x, f.y, 2.4, 0, 7); ctx.fill();
       } else {
         ctx.fillStyle = '#f0c419'; ctx.beginPath(); ctx.arc(f.x, f.y, 3.6, 0, 7); ctx.fill();
         ctx.fillStyle = '#f9e06a'; ctx.beginPath(); ctx.arc(f.x - 0.6, f.y - 0.6, 1.9, 0, 7); ctx.fill();
@@ -1567,6 +1724,7 @@ button { touch-action: manipulation; }
   // the bank as a wave, so neighboring tufts bend together. Still under reduced motion.
   function drawGrass(sec) {
     const t = reduced ? 0 : sec;
+    const windLean = weather === 'wind' ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
     ctx.lineWidth = 2; ctx.lineCap = 'round';
     for (const c in grass) {
       ctx.strokeStyle = c;
@@ -1582,7 +1740,7 @@ button { touch-action: manipulation; }
         const base = -Math.PI / 2 + g.a, tip = base + gust * (g.len / 12);
         const mx = g.x + Math.cos(base) * g.len * 0.5, my = g.y + Math.sin(base) * g.len * 0.5;
         ctx.moveTo(g.x, g.y);
-        ctx.quadraticCurveTo(mx, my, g.x + Math.cos(tip) * g.len, g.y + Math.sin(tip) * g.len);
+        ctx.quadraticCurveTo(mx, my + windLean * g.len * 0.5, g.x + Math.cos(tip) * g.len, g.y + Math.sin(tip) * g.len + windLean * g.len);
       }
       ctx.stroke();
     }
@@ -1598,7 +1756,8 @@ button { touch-action: manipulation; }
     const g = ctx.createLinearGradient(river.far, 0, river.base + 30, 0);
     // Spring melt-water: the river runs high and brown, clearing as the weeks go on.
     const flood = spring.flood, silt = c => (flood > 0 ? shadeHex(c, '#8a6a43', 0.78 * flood) : c);
-    g.addColorStop(0, silt('#1d555b')); g.addColorStop(0.5, silt('#25666b')); g.addColorStop(1, silt('#3a8a86'));
+    if (season === 'summer') { g.addColorStop(0, '#2a7a80'); g.addColorStop(0.5, '#3b9296'); g.addColorStop(1, '#6dbdb4'); } // low and clear
+    else { g.addColorStop(0, silt('#1d555b')); g.addColorStop(0.5, silt('#25666b')); g.addColorStop(1, silt('#3a8a86')); }
     ctx.fillStyle = g; ctx.fill();
     if (flood > 0) { // it has spilled over onto the bank, too
       ctx.save();
@@ -1611,7 +1770,7 @@ button { touch-action: manipulation; }
     ctx.save();
     ctx.beginPath();
     for (let y = -400; y <= WH + 400; y += 10) ctx.lineTo(shoreAt(y) - 6, y);
-    ctx.strokeStyle = 'rgba(160,210,200,0.55)'; ctx.lineWidth = 16; ctx.stroke();
+    ctx.strokeStyle = 'rgba(160,210,200,0.55)'; ctx.lineWidth = season === 'summer' ? 26 : 16; ctx.stroke(); // wide, shallow edge in summer
     ctx.restore();
     for (const p of pebbles) {
       ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(shoreAt(p.y) + p.dx, p.y, p.r, 0, 7); ctx.fill();
@@ -1663,11 +1822,181 @@ button { touch-action: manipulation; }
       ctx.save();
       ctx.translate(laneX(y, lane) + Math.sin(t * 0.9 + i) * 6, y);
       ctx.rotate(i + t * 0.6 * (i % 2 ? 1 : -1));
-      ctx.fillStyle = season === 'spring' ? '#7a6a4a' : LEAF_COLORS[i % LEAF_COLORS.length]; // spring: old twigs and leaves
+      ctx.fillStyle = season === 'autumn' ? LEAF_COLORS[i % LEAF_COLORS.length] : season === 'spring' ? '#7a6a4a' : '#5f8a3e'; // spring: old twigs; summer: green leaves
       ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.5, 0, 0, 7); ctx.fill();
       ctx.restore();
     }
+    drawBars();
     drawFloes(sec);
+    drawFloaters(sec);
+    if (season === 'summer') drawDragonflies(sec);
+  }
+
+  // Tall prairie grass: long, dense, swaying blades, drawn over the trout (a little see-through) so a trout
+  // in the grass shows through it. Found by binary search on x, like the short grass.
+  function drawTall(sec) {
+    if (!tall.length) return;
+    const t = reduced ? 0 : sec;
+    ctx.globalAlpha = 0.68; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
+    for (const c in tallBlades) {
+      ctx.strokeStyle = c; ctx.beginPath();
+      const blades = tallBlades[c];
+      let lo = 0, hi = blades.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (blades[mid].x > cam - 30) hi = mid; else lo = mid + 1; }
+      for (let i = lo; i < blades.length; i++) {
+        const g = blades[i];
+        if (g.x >= cam + view.w + 30) break;
+        const sway = reduced ? 0 : Math.sin(g.x * 0.02 - t * 1.6 + g.y * 0.006) * 0.55 + Math.sin(t * 0.8 + g.x * 0.05) * 0.18;
+        const base = -Math.PI / 2 + g.a, tip = base + sway * (g.len / 20);
+        ctx.moveTo(g.x, g.y);
+        ctx.quadraticCurveTo(g.x + Math.cos(base) * g.len * 0.5, g.y + Math.sin(base) * g.len * 0.5, g.x + Math.cos(tip) * g.len, g.y + Math.sin(tip) * g.len);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Gravel bars: a pale shoal against the bank, reaching out into the river exactly as far as barAt() says
+  // (that is where the water starts, see edgeAt), with a light ripple line and a scatter of stones.
+  function drawBars() {
+    for (const s of bars) {
+      if (!onScreen(shoreAt(s.y) - s.h / 2, s.h + 40)) continue;
+      const y0 = s.y - s.len / 2, y1 = s.y + s.len / 2;
+      ctx.beginPath();
+      ctx.moveTo(shoreAt(y0) + 4, y0);
+      for (let y = y0; y <= y1; y += 8) { const t = (y - s.y) / (s.len / 2); ctx.lineTo(shoreAt(y) - s.h * Math.max(0, 1 - t * t), y); }
+      for (let y = y1; y >= y0; y -= 8) ctx.lineTo(shoreAt(y) + 4, y);
+      ctx.closePath();
+      ctx.fillStyle = '#d3cbb2'; ctx.fill();
+      ctx.strokeStyle = 'rgba(226,244,240,0.75)'; ctx.lineWidth = 3; ctx.stroke();
+      for (let k = 0; k < 16; k++) { // stones, placed the same way every frame
+        const u = Math.abs(Math.sin(s.seed * 12.9 + k * 7.3)), v = Math.abs(Math.sin(s.seed * 4.1 + k * 3.7));
+        const y = y0 + u * s.len, t = (y - s.y) / (s.len / 2), x = shoreAt(y) - v * s.h * Math.max(0, 1 - t * t) * 0.85;
+        ctx.fillStyle = k % 2 ? '#b5ad98' : '#ebe5d2'; ctx.beginPath(); ctx.arc(x, y, 1.6 + (k % 3), 0, 7); ctx.fill();
+      }
+    }
+  }
+
+  // Canoes and tubers: a canoe is a long slim hull with a paddler; a tube is a ring with a swimmer in it.
+  function drawFloaters(sec) {
+    for (const f of floaters) {
+      const p = floaterPos(f);
+      if (!onScreen(p.x, 50)) continue;
+      const bob = reduced ? 0 : Math.sin(sec * 1.5 + f.seed) * 1.2;
+      ctx.fillStyle = 'rgba(14,40,46,0.25)'; ctx.beginPath(); ctx.ellipse(p.x + 3, p.y + 4, f.rx, f.ry, 0, 0, 7); ctx.fill();
+      if (f.kind === 'canoe') {
+        ctx.fillStyle = f.color; ctx.beginPath(); ctx.ellipse(p.x, p.y + bob, f.rx, f.ry, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + bob, f.rx * 0.55, f.ry * 0.8, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = '#e8d2b0'; ctx.beginPath(); ctx.arc(p.x, p.y + bob - 4, 5, 0, 7); ctx.fill(); // paddler's head
+        ctx.fillStyle = '#d25b3a'; ctx.beginPath(); ctx.ellipse(p.x, p.y + bob + 3, 7, 4.5, 0, 0, 7); ctx.fill();
+        ctx.strokeStyle = '#6b4a2a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(p.x - 14, p.y + bob + 2); ctx.lineTo(p.x + 14, p.y + bob - 4); ctx.stroke();
+      } else {
+        ctx.strokeStyle = f.color; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(p.x, p.y + bob, f.rx - 4, 0, 7); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y + bob, f.rx - 4, 0.3, 1.6); ctx.stroke();
+        ctx.fillStyle = '#e8d2b0'; ctx.beginPath(); ctx.arc(p.x, p.y + bob - 2, 4.2, 0, 7); ctx.fill();
+        ctx.fillStyle = '#3a7fb0'; ctx.beginPath(); ctx.ellipse(p.x, p.y + bob + 3.5, 6, 3.2, 0, 0, 7); ctx.fill();
+      }
+    }
+  }
+  function updateFloaters(dt) {
+    for (const f of floaters) {
+      f.y += f.vy * dt;
+      if (f.y > WH + 140) { f.y = -140 - rnd(0, 160); f.lane = rnd(0.2, 0.8); }
+    }
+  }
+  // Landing on a floater knocks the trout back onto the bank: a short hop and a thump, no harm done.
+  function bumpFish() {
+    fish.x = edgeAt(fish.y) + 10; fish.vx = 130; fish.vy = 0; fish.vz = 230; fish.z = 0.01; fish.cooldown = 0.35;
+    burst(fish.x, fish.y, 8, '#d6f1ee', 120); tone(140, 0.14, 'triangle', 0.14, 0.5); announce('Bumped back onto the bank.');
+  }
+
+  // ---------- dusk and the raccoon ----------
+  // A dusk round is dark and warm, with a short sight around the trout and fireflies blinking over the grass
+  // (none with reduced motion). The raccoon walks in from the far end of the bank, straight toward the
+  // trout, at RACCOON.speed (a good deal slower than a full flop), slower still in tall grass. It cannot go
+  // into the river, and it catches a trout it reaches on the ground. A trout that keeps flopping to the
+  // water gets away; the invisibility bubble stops it in its tracks.
+  const RACCOON = { speed: 170, catchR: 26 };
+  function updateRaccoon(r, dt) {
+    if (!r.active) {
+      r.t -= dt;
+      if (r.t > 0) return;
+      r.active = true; r.x = Math.max(edgeAt(fish.y) + 40, Math.min(TREES - 10, fish.x + rnd(-40, 40)));
+      r.y = fish.y < WH / 2 ? BOTTOM + 30 : TOP - 30; // from whichever end of the bank is farther away
+      tone(1700, 0.12, 'square', 0.05, 0.5); tone(2300, 0.1, 'square', 0.04, 0.5); announce('A raccoon!');
+      return;
+    }
+    if (invisible > 0) return;
+    const dx = fish.x - r.x, dy = fish.y - r.y, d = Math.hypot(dx, dy) || 1;
+    const step = Math.min(d, RACCOON.speed * (inTallGrass(r.x, r.y) ? 0.55 : 1) * dt);
+    r.x += dx / d * step; r.y += dy / d * step; r.step += step;
+    r.x = Math.max(edgeAt(r.y) + 14, Math.min(TREES - 10, r.x)); // not into the river, not out of the bank
+    if (Math.hypot(fish.x - r.x, fish.y - r.y) < RACCOON.catchR && fish.z < 12) lose('raccoon');
+  }
+  function drawRaccoon() {
+    const r = raccoon;
+    if (!r || !r.active) return;
+    const ang = Math.atan2(fish.y - r.y, fish.x - r.x), bob = Math.sin(r.step * 0.25) * 1.5;
+    ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(ang);
+    ctx.fillStyle = '#5b5750'; ctx.beginPath(); ctx.ellipse(-3, 0, 15, 8.5 + bob * 0.2, 0, 0, 7); ctx.fill(); // body
+    ctx.fillStyle = '#3a3733'; for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(-2, s * 8, 4.5, 2.4 + bob * 0.1, 0, 0, 7); ctx.fill(); } // legs
+    for (let k = 0; k < 4; k++) { ctx.fillStyle = k % 2 ? '#2e2c29' : '#8b867b'; ctx.beginPath(); ctx.ellipse(-18 - k * 4.5, 0, 4.2, 4, 0, 0, 7); ctx.fill(); } // ringed tail
+    ctx.fillStyle = '#6a665e'; ctx.beginPath(); ctx.ellipse(11, 0, 7, 6, 0, 0, 7); ctx.fill(); // head
+    ctx.fillStyle = '#1f1e1c'; ctx.beginPath(); ctx.ellipse(12, 0, 4, 5.2, 0, 0, 7); ctx.fill(); // the mask
+    ctx.fillStyle = '#6a665e'; for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(8, s * 5.5, 2.2, 0, 7); ctx.fill(); } // ears
+    ctx.restore();
+  }
+  // Eyeshine: two yellow-green glints, drawn above the dusk so the raccoon is always findable.
+  function drawRaccoonEyes(sec) {
+    const r = raccoon;
+    if (!r || !r.active || mode === 'title') return;
+    const ang = Math.atan2(fish.y - r.y, fish.x - r.x), ex = r.x + Math.cos(ang) * 17, ey = r.y + Math.sin(ang) * 17;
+    const px = -Math.sin(ang) * 3.2, py = Math.cos(ang) * 3.2, a = reduced ? 0.9 : 0.65 + 0.35 * Math.sin(sec * 7);
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = 'rgba(210,255,120,' + 0.25 * a + ')'; ctx.beginPath(); ctx.arc(ex + px * s, ey + py * s, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(235,255,150,' + a + ')'; ctx.beginPath(); ctx.arc(ex + px * s, ey + py * s, 2, 0, 7); ctx.fill();
+    }
+  }
+  function updateFlies(dt) {
+    const want = dusk && !reduced ? Math.min(40, Math.round(30 * (W * H) / (412 * 915))) : 0;
+    while (flies.length < want) flies.push({ x: Math.random() * W, y: Math.random() * H, ph: rnd(0, 6), sp: rnd(0.6, 1.4) });
+    if (flies.length > want) flies.length = want;
+    for (const f of flies) {
+      f.x += Math.sin(clock * 0.7 * f.sp + f.ph) * 14 * dt; f.y += Math.cos(clock * 0.5 * f.sp + f.ph * 2) * 10 * dt;
+      if (f.x < -10) f.x = W + 10; else if (f.x > W + 10) f.x = -10;
+      if (f.y < -10) f.y = H + 10; else if (f.y > H + 10) f.y = -10;
+    }
+  }
+  function drawDusk() {
+    if (!dusk || mode === 'title') return;
+    ctx.fillStyle = 'rgba(255,150,70,0.09)'; ctx.fillRect(0, 0, W, H); // warm, low light
+    const p = toScreen(fish.x, fish.y), r = 340 * view.s;
+    const g = ctx.createRadialGradient(p.x, p.y, r * 0.3, p.x, p.y, r);
+    g.addColorStop(0, 'rgba(14,10,38,0.25)'); g.addColorStop(1, 'rgba(14,10,38,0.82)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    for (const f of flies) {
+      const a = Math.pow(Math.max(0, Math.sin(clock * 1.7 * f.sp + f.ph)), 3);
+      if (a < 0.05) continue;
+      ctx.fillStyle = 'rgba(220,255,120,' + 0.22 * a + ')'; ctx.beginPath(); ctx.arc(f.x, f.y, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(245,255,170,' + a + ')'; ctx.beginPath(); ctx.arc(f.x, f.y, 1.8, 0, 7); ctx.fill();
+    }
+  }
+
+  // A few dragonflies darting along the water's edge in summer: a thin body and four glassy wings.
+  function drawDragonflies(sec) {
+    if (reduced) return;
+    for (let i = 0; i < 5; i++) {
+      const y = (((sec * 0.2 + i * 0.37) % 1) * (WH + 200)) - 100 + Math.sin(sec * 3 + i) * 10;
+      const x = shoreAt(y) - 14 - (i % 3) * 22 - 18 * Math.abs(Math.sin(sec * 2.3 + i));
+      if (!onScreen(x, 20)) continue;
+      ctx.strokeStyle = i % 2 ? '#2d7fb3' : '#3a9a5a'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+      ctx.fillStyle = 'rgba(232,246,250,' + (0.45 + 0.25 * Math.sin(sec * 40 + i)) + ')';
+      for (const s of [-1, 1]) {
+        ctx.beginPath(); ctx.ellipse(x + s * 5, y - 2.5, 5, 1.6, s * 0.25, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(x + s * 4, y + 0.5, 4, 1.4, s * 0.2, 0, 7); ctx.fill();
+      }
+    }
   }
 
   // Ice floes drifting down the near bank (rounds 200–215): pale slabs with a shadow on the water.
@@ -1928,7 +2257,7 @@ button { touch-action: manipulation; }
     const clump = () => sp.evergreen ? pickOne(sp.pal)
       : plum ? shadeHex(pickOne(SPRING_LEAF), pickOne(BLOSSOM), clamp01(spring.blossom * 1.4 + rnd(-0.1, 0.1)))
       : season === 'spring' ? shadeHex(pickOne(SPRING_LEAF), pickOne(SUMMER), clamp01(leafy * 0.9 + rnd(-0.1, 0.1)))
-      : shadeHex(pickOne(SUMMER), pickOne(sp.pal), clamp01(turned * 1.2 + rnd(-0.2, 0.2)));
+      : shadeHex(season === 'summer' ? shadeHex(pickOne(SUMMER), '#1f3a1c', 0.3) : pickOne(SUMMER), pickOne(sp.pal), clamp01(turned * 1.2 + rnd(-0.2, 0.2)));
     const lobes = [{ dx: 0, dy: 0, r: r * 0.62, c: clump() }];
     const n = 6 + Math.floor(r / 10);
     for (let i = 0; i < n; i++) {
@@ -2009,6 +2338,15 @@ button { touch-action: manipulation; }
   function treeReach() {
     const right = view.w >= WW + 40 ? (WW + view.w) / 2 : WW;
     return Math.min(620, Math.max(0, right - TREES) + 70);
+  }
+  // A summer shade canopy as a sprite (centred in a square canvas), made once per round: six of these.
+  function buildShadeSprite(r) {
+    const side = Math.ceil(r * 2.5), c = document.createElement('canvas');
+    c.width = c.height = side;
+    const g = c.getContext('2d');
+    g.translate(side / 2, side / 2);
+    paintTree(g, makeTree(0, 0, r, 0));
+    return { r, canvas: c, side };
   }
   function buildTrees() {
     const reach = treeReach();
@@ -2321,7 +2659,10 @@ button { touch-action: manipulation; }
     drawPowerup();
     if (mode !== 'title') drawFish();
     for (const h of herons) drawHeron(h);
+    drawRaccoon();
     drawTrees();
+    drawTall(sec);
+    drawShadeCanopies();
     for (const p of parts) {
       ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2.5));
       ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
@@ -2332,8 +2673,12 @@ button { touch-action: manipulation; }
     ctx.restore();
 
     drawHaze();
+    drawHeat(sec);
+    drawDusk();
+    if (raccoon && raccoon.active && mode !== 'title') { ctx.save(); worldTransform(); drawRaccoonEyes(sec); ctx.restore(); }
     drawLightning();
     drawRain(); // under the rings, so nothing crosses a strike warning
+    drawGust();
     // Dive rings go back on top of the haze: the weather never hides a strike.
     if (sky().haze) { ctx.save(); worldTransform(); for (const e of eagles) drawEagleRing(e); ctx.restore(); }
     drawSnowfall();
@@ -2341,10 +2686,10 @@ button { touch-action: manipulation; }
     // Text stays unmirrored, in screen space.
     const fs = Math.max(0.7, view.s);
     // While the river is off screen, a tag on that edge points to it with the distance in feet.
-    if (mode === 'play' && shoreAt(fish.y) < cam) {
+    if (mode === 'play' && edgeAt(fish.y) < cam) {
       // In winter it points to the nearest ice-fishing hole instead.
       const hole = winter ? holes.reduce((b, h) => (!b || Math.hypot(h.x - fish.x, h.y - fish.y) < Math.hypot(b.x - fish.x, b.y - fish.y) ? h : b), null) : null;
-      const away = hole ? Math.hypot(hole.x - fish.x, hole.y - fish.y) : fish.x - shoreAt(fish.y);
+      const away = hole ? Math.hypot(hole.x - fish.x, hole.y - fish.y) : fish.x - edgeAt(fish.y);
       const feet = Math.max(1, Math.round(away / 43)), name = hole ? 'Ice hole' : 'River';
       const label = flip ? name + ' ' + feet + ' ft ▶' : '◀ ' + name + ' ' + feet + ' ft';
       ctx.font = '800 ' + Math.round(15 * fs) + 'px Nunito, system-ui, sans-serif';
@@ -2362,7 +2707,7 @@ button { touch-action: manipulation; }
     if (mode === 'play' && seasonTimer > 0) {
       // Fade in over 0.4 s, hold, fade out over the last 0.5 s, in sugar-maple orange.
       ctx.globalAlpha = Math.max(0, Math.min(1, seasonTimer / 0.5, (SEASON_TIME - seasonTimer) / 0.4));
-      screenText(seasonName, W / 2, view.oy + 250 * view.s, 64 * fs, season === 'spring' ? '#a4e26c' : winter ? '#d6ecf7' : '#f0a03a');
+      screenText(seasonName, W / 2, view.oy + 250 * view.s, 64 * fs, season === 'summer' ? '#f2c14e' : season === 'spring' ? '#a4e26c' : winter ? '#d6ecf7' : '#f0a03a');
       ctx.globalAlpha = 1;
     } else if (mode === 'play' && bannerTimer > 0) {
       ctx.globalAlpha = Math.min(1, bannerTimer);

@@ -1064,12 +1064,12 @@ button { touch-action: manipulation; }
   // EAGLE_SKILL = 6 sets its flying speed, strike size and rest between dives; lower it to make
   // the eagle easier.
   const EAGLE_FROM = 5, EAGLE_SKILL = 6;
-  // One eagle from round 5. In winter, eagles hunt in pairs: one pair in rounds 100–149, two pairs
-  // from 150 through 199. Spring goes back to one eagle.
+  // One eagle from round 5. In winter, eagles hunt in teams: one pair in rounds 100–149, one trio
+  // (three eagles, a single team) from 150 through 199. Spring goes back to one eagle.
   // In spring it is one eagle, then one pair from round 250 (the winter pair logic, with the autumn dive).
   const EAGLE_PAIR_FROM = 250;
   const eagleCount = n => n < EAGLE_FROM || n >= FINALE_FROM ? 0 : seasonOf(n) === 'spring' || seasonOf(n) === 'summer' ? (n < EAGLE_PAIR_FROM ? 1 : 2)
-    : seasonOf(n) === 'autumn' ? 1 : n < 150 ? 2 : 4;
+    : seasonOf(n) === 'autumn' ? 1 : n < 150 ? 2 : 3;
   // From round 10 it flies in and circles 5% faster every 10 rounds, compounding, up to
   // MAX_ROUND: ×1.05 in rounds 10–19, ×1.1025 in 20–29, … ×1.63 at round 100. The dive itself
   // doesn't speed up (see EAGLE_DIVE), nor does the strike size.
@@ -1293,25 +1293,64 @@ button { touch-action: manipulation; }
     }
   }
 
-  // ---------- eagle pairs (winter) ----------
-  // Winter eagles hunt in pairs. A pair flies in, circles the trout on opposite sides, then dives as
-  // a team, picking by coin flip:
+  // ---------- eagle teams (winter) ----------
+  // Winter eagles hunt in teams. A pair (rounds 100–149, and spring from 250) flies in, circles the
+  // trout on opposite sides, then dives together, picking by coin flip:
   //   one-two  one eagle drops its ring; when that dive is over, its partner drops a ring where
   //            the trout has landed, so the trout has to dodge twice;
   //   pincer   both rings drop at once, either side of the trout's path, leaving the way forward
   //            or back open.
-  // With two pairs they take turns; the other pair waits high above as faint shadows. Every ring
-  // still waits for the trout to be on the ground, so each dive can be escaped.
+  // From round 150 the three winter eagles are one trio. They circle the trout 120 degrees apart and
+  // pick one of three tactics at random:
+  //   chain    a ring, then once that dive is over a ring where the trout has landed, then a third;
+  //   net      three rings at once around the trout with one open gap, in a direction the trout can
+  //            reach with a normal flop (not into a wall);
+  //   chaser   a pincer from two eagles, then the third drops a ring where the trout has landed.
+  // (More than one team still takes turns, with the others waiting high above as faint shadows.)
+  // Every ring still waits for the trout to be on the ground, and the warning scales with flopScale,
+  // so each dive can be escaped.
   let teams = [], activeTeam = 0;
   function makeTeams() {
     teams = []; activeTeam = 0;
     const birds = eagles.filter(e => e.kind !== 'osprey'); // ospreys hunt alone
     if (birds.length < 2) return;
-    for (let i = 0; i + 1 < birds.length; i += 2) {
+    for (let i = 0; i + 1 < birds.length && birds.length !== 3; i += 2) {
       birds[i].team = birds[i + 1].team = true;
       teams.push({ a: birds[i], b: birds[i + 1], phase: 'rest', t: rnd(2.5, 4), tactic: '', synced: false });
     }
+    if (birds.length === 3) { // the winter trio: all three are one team
+      const [a, b, c] = birds;
+      a.team = b.team = c.team = true;
+      teams = [{ a, b, c, phase: 'rest', t: rnd(2.5, 4), tactic: '', synced: false, next: 0 }];
+    }
   }
+  // The trio's opening move. `aim` is where a single eagle would strike.
+  function startTrio(p, aim) {
+    const { a, b, c } = p, R = dive().radius;
+    p.tactic = ['chain', 'net', 'chaser'][Math.floor(Math.random() * 3)];
+    if (p.tactic === 'chain') { startDive(a, aim); p.next = 1; return; }
+    if (p.tactic === 'chaser') { // a pincer from a and b (as for a pair), then c follows up
+      const h = Math.hypot(fish.vx, fish.vy) > 5 ? Math.atan2(fish.vy, fish.vx) : rnd(0, Math.PI * 2);
+      const off = R * 0.9, ox = -Math.sin(h) * off, oy = Math.cos(h) * off;
+      startDive(a, { x: aim.x + ox, y: aim.y + oy });
+      startDive(b, { x: aim.x - ox, y: aim.y - oy }, true);
+      p.next = 2; return;
+    }
+    // Net: rings on three sides of the trout and one gap, in a direction a normal flop can reach.
+    const reach = 0.8 * 298 * flopScale(), open = [];
+    for (let k = 0; k < 24; k++) {
+      const an = k / 24 * Math.PI * 2, lx = fish.x + Math.cos(an) * reach, ly = fish.y + Math.sin(an) * reach;
+      if (ly > TOP + 40 && ly < BOTTOM - 40 && lx > 60 && lx < TREES - 40) open.push(an);
+    }
+    const g = open.length ? open[Math.floor(Math.random() * open.length)] : rnd(0, Math.PI * 2), D = R * NET_SPREAD;
+    [a, b, c].forEach((e, i) => {
+      const an = g + Math.PI / 2 * (i + 1);
+      startDive(e, { x: fish.x + Math.cos(an) * D, y: fish.y + Math.sin(an) * D }, i > 0);
+    });
+    p.next = 3;
+  }
+  const TRIO_REST = [2, 1]; // the trio rests 2 s plus up to 1 s between hunts (a pair: dive().rest)
+  const NET_SPREAD = 1.6; // net rings sit this many ring-radii from the trout
   const huntingNow = e => e.phase === 'track' || e.phase === 'circle' || e.phase === 'lock';
   function updateTeams(dt) {
     if (!teams.length || mode !== 'play') return;
@@ -1323,30 +1362,37 @@ button { touch-action: manipulation; }
         e.x = fish.x + rnd(-300, 300); e.y = spawnY(120);
       }
     });
-    const p = teams[activeTeam], { a, b } = p;
+    const p = teams[activeTeam], { a, b, c } = p;
+    const crew = c ? [a, b, c] : [a, b];
     const nextTeam = () => {
       p.phase = 'rest'; p.synced = false;
-      const [r0, r1] = dive().rest; p.t = r0 + rnd(0, r1);
+      const [r0, r1] = c ? TRIO_REST : dive().rest; p.t = r0 + rnd(0, r1);
       activeTeam = (activeTeam + 1) % teams.length;
     };
     if (p.phase === 'rest') {
       p.t -= dt;
       if (p.t > 0 || !visibleTrout()) return;
       // Fly in from opposite sides (or swoop down from the waiting circle).
-      for (const [e, side] of [[a, -1], [b, 1]]) {
+      const sides = [[a, -1], [b, 1]];
+      if (c) sides.push([c, Math.random() < 0.5 ? -1 : 1]);
+      for (const [e, side] of sides) {
         if (e.phase !== 'wait') { e.x = fish.x + side * rnd(150, 300); e.y = spawnY(80); }
         e.phase = 'track';
       }
       p.phase = 'hunt';
     } else if (p.phase === 'hunt') {
-      if (!huntingNow(a) && !huntingNow(b)) { nextTeam(); return; } // they lost the trout
-      if (a.phase !== 'circle' || b.phase !== 'circle') return;
-      if (!p.synced) { b.ang = a.ang + Math.PI; b.dir = a.dir; b.t = a.t; b.circleDur = a.circleDur; p.synced = true; }
+      if (!crew.some(huntingNow)) { nextTeam(); return; } // they lost the trout
+      if (crew.some(e => e.phase !== 'circle')) return;
+      if (!p.synced) {
+        crew.forEach((e, i) => { if (i) { e.ang = a.ang + Math.PI * 2 / crew.length * i; e.dir = a.dir; e.t = a.t; e.circleDur = a.circleDur; } });
+        p.synced = true;
+      }
       if (a.t > 0 || !troutLanded() || ospreyBusy()) return;
       if (Math.random() < sky().abort) {
-        eagleLeave(a); eagleLeave(b); announce('The eagles lost you in the storm.'); nextTeam(); return;
+        crew.forEach(eagleLeave); announce('The eagles lost you in the storm.'); nextTeam(); return;
       }
       const aim = eagleAim(dive().lead);
+      if (c) { startTrio(p, aim); p.phase = 'strike'; return; }
       p.tactic = Math.random() < 0.5 ? 'pincer' : 'onetwo';
       if (p.tactic === 'pincer') {
         // Across the trout's heading, 0.9 ring-widths each side.
@@ -1357,6 +1403,14 @@ button { touch-action: manipulation; }
       } else startDive(a, aim);
       p.phase = 'strike';
     } else if (p.phase === 'strike') {
+      if (c) { // the trio: the eagles still waiting each drop a ring where the trout has landed, once the rings before are over
+        if (p.tactic !== 'net' && !crew.some(e => e.phase === 'lock')) {
+          while (p.next < 3 && crew[p.next].phase !== 'circle') p.next++; // skip any that gave up
+          if (p.next < 3 && troutLanded() && visibleTrout() && !ospreyBusy()) startDive(crew[p.next++], eagleAim(dive().lead));
+        }
+        if (!crew.some(huntingNow)) nextTeam();
+        return;
+      }
       // One-two: once the first dive is over, the partner strikes where the trout has landed.
       if (p.tactic === 'onetwo' && b.phase === 'circle' && a.phase !== 'lock' && troutLanded() && visibleTrout() && !ospreyBusy()) {
         startDive(b, eagleAim(dive().lead));

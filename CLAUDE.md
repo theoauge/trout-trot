@@ -63,7 +63,7 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
   - Ground snow is drawn as crisp blue-shadowed drifts plus a grain tile and glints.
   - Flops weaken 4% per 10 rounds to 60% at 190 (`flopScale`), and drying slows by the same factor.
   - **Weather** per round: 75% clear, 12.5% snowing, 12.5% storm. Haze beyond 260 / 150 units of the trout. Eagles circle longer and aim worse; in storms they abort 25% of pair dives. Red rings always draw above the haze.
-  - **Eagles:** 2 (one pair) in rounds 100–149, 4 (two pairs, taking turns) from 150 on. Pairs circle opposite each other, then a coin flip picks one-two or pincer.
+  - **Eagles:** 2 (one pair) in rounds 100–149; from 150 on 3, one trio. Pairs circle opposite each other, then a coin flip picks one-two or pincer. The trio circles 120° apart and picks at random: **chain** (a ring, then one where the trout landed, then a third), **net** (three rings at once, `NET_SPREAD` 1.6 ring-radii out, one open gap in a direction a normal flop can reach) or **chaser** (a pincer, then the third drops where the trout landed). The trio rests 2 s plus up to 1 s between hunts (`TRIO_REST`). Rings still wait for the trout to be on the ground.
 - **Spring (rounds 200–299)**
   - Season comes from `seasonOf(n)` (autumn 1–99, winter 100–199, spring 200–299, summer 300–399, finale 400); `winter` is the cheap flag for winter-only checks. `springAt(n)` gives `melt`, `green`, `leafOut`, `flood` and `blossom` (each 0–1).
   - Round 200 opens with a green "Spring" banner. Leftover snow patches are gone by 205. The ground goes from mud to full green by 240; the river runs high and brown at 200 and clears by 240 (looks only). A few old brown leaves vanish by 220.
@@ -113,6 +113,6 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
 
 ## State
 
-- **Last commit:** `v1.1.004`: the Great Eagle finale, ending and stats, storm rounds, the Android back gesture and the shorter swipe buffer, on top of `v1.1.003`. Nothing is uncommitted. Not yet reviewed on a device or released.
+- **Last commit:** `v1.1.004`: the Great Eagle finale, ending and stats, storm rounds, the Android back gesture and the shorter swipe buffer, on top of `v1.1.003`. After it came the winter trio (rounds 150–199); nothing is uncommitted. Not yet reviewed on a device or released.
 - **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding, summer frame rate (draw work is about 30–60% above late spring: tall grass blades, canopies and floaters are the likely costs) and whether summer routes feel fair now that a trout needs a spring stop on the way. iOS "1.1.003" is likely read as 1.1.3 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

@@ -36,7 +36,7 @@ workflows:
         script: xcode-project use-profiles
       - name: Give this upload the next build number
         # TestFlight rejects a build number it has already seen, so each upload
-        # takes the latest one on TestFlight plus 1. The version (1.1.003) is unchanged.
+        # takes the latest one on TestFlight plus 1. The version (1.1.004) is unchanged.
         script: |
           cd trout-trot-app/ios/App
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || true)

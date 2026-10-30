@@ -15,7 +15,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 | Path | What it is |
 |---|---|
 | `flop-home.html` | **The game.** All HTML, CSS and JS in one file. Edit this. |
-| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.003 build 1) |
+| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.004 build 1) |
 | `trout-trot-app/www/index.html` | Generated from `flop-home.html` by `npm run build`. Never edit by hand. |
 | `trout-trot-app/scripts/` | `build-www.mjs`, `make-icons.mjs`, `fetch-fonts.mjs`, `set-version.mjs` |
 | `trout-trot-app/README.md` | App commands and the Android release steps |
@@ -113,6 +113,6 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
 
 ## State
 
-- **Last commit:** `v1.1.003` summer. **Uncommitted:** finale v1.1.004 stages A and B, and storm rounds (winter snowstorm, spring thunderstorm) in `flop-home.html` and `www/index.html`; the version is still 1.1.003 until the last step.
+- **Last commit:** `v1.1.004`: the Great Eagle finale, ending and stats, storm rounds, the Android back gesture and the shorter swipe buffer, on top of `v1.1.003`. Nothing is uncommitted. Not yet reviewed on a device or released.
 - **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding, summer frame rate (draw work is about 30–60% above late spring: tall grass blades, canopies and floaters are the likely costs) and whether summer routes feel fair now that a trout needs a spring stop on the way. iOS "1.1.003" is likely read as 1.1.3 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

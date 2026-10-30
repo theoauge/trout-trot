@@ -404,6 +404,7 @@ button { touch-action: manipulation; }
     return null;
   }
   const SHADE_DRAIN = 0.6, WIND_PUSH = 110;
+  const SPRING_WATER = 45.5; // 30% more than the old 35
   const shadeAt = (x, y) => shadeTrees.some(t => Math.hypot(x - t.x, y - t.y) < t.r * 1.1);
   const shadeFactor = () => (shadeTrees.length && shadeAt(fish.x, fish.y) ? SHADE_DRAIN : 1);
   const gustNow = () => (windy() ? clamp01(0.2 + 0.8 * Math.max(0, Math.sin(clock * 0.8 + Math.sin(clock * 0.31) * 2))) : 0);
@@ -504,7 +505,7 @@ button { touch-action: manipulation; }
     const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
     for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
       const r = 78, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
-      if (clearOf(x, y, r)) { springs.push({ x, y, r, water: 35 }); i++; }
+      if (clearOf(x, y, r)) { springs.push({ x, y, r, water: SPRING_WATER }); i++; }
     }
     // Invisibility bubble, somewhere between the trout and the river, and always out of every
     // heron's reach, even for a trout touching the edge of the bubble's pickup range.
@@ -2116,7 +2117,7 @@ button { touch-action: manipulation; }
       const ok = Math.hypot(x - fish.x, y - fish.y) > r + 80 && boulders.every(b => Math.hypot(x - b.x, y - b.y) > r + b.r + 24) &&
         springs.every(s => Math.hypot(x - s.x, y - s.y) > r + s.r + 20) &&
         logs.every(l => x + r < l.x - 20 || x - r > l.x + l.w + 20 || y + r < l.y - 20 || y - r > l.y + l.h + 20);
-      if (ok) { springs.push({ x, y, r, water: 35 }); i++; }
+      if (ok) { springs.push({ x, y, r, water: SPRING_WATER }); i++; }
     }
     const nest = { x: river.base + 190, y: 230 }, P = BOSS_PHASE[1];
     const bird = (kind, phase) => ({ kind, boss: true, phase, t: 0, x: nest.x, y: nest.y, vx: 0, vy: 0, heading: 0, radius: P.radius });
@@ -2830,7 +2831,7 @@ button { touch-action: manipulation; }
   }
 
   function drawSpring(s) {
-    const k = Math.max(0, s.water / 35);
+    const k = Math.max(0, s.water / SPRING_WATER);
     ctx.fillStyle = '#a69c86';
     ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 5, 0, 7); ctx.fill();
     ctx.fillStyle = 'rgba(80,165,170,' + (0.3 + 0.6 * k) + ')';

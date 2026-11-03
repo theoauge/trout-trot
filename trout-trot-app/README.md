@@ -3,7 +3,7 @@
 A rainbow trout stranded on a bank of the Upper Iowa River near Decorah has to flop back into the water before it dries out. The game is wrapped as an iPhone and Android app with [Capacitor](https://capacitorjs.com).
 
 - App ID: `com.thomas.trouttrot`. It can't be changed after the app is published, so keep it the same for every release.
-- Version: 1.1.004 (build 1).
+- Version: 1.1.005 (build 5).
 
 ## Layout
 

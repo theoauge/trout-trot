@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#7c9c52">
+<meta name="theme-color" content="#94764d">
 <style>
   /* App shell: matches the page skeleton the game was designed in. */
   :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -16,7 +16,7 @@
 <style>
 /* One-screen top-down river bank: world scaled to fit, river down one side, slim HUD on top, centered cards for start / pause / game over. Single autumn-daylight look by design. */
 :root {
-  --grass: #7c9c52;
+  --grass: #94764d;
   --river: #2c6f74;
   --trout: #e3798c;
   --leaf: #d9822b;
@@ -233,7 +233,7 @@ button { touch-action: manipulation; }
   const cv = document.getElementById('game');
   const ctx = cv.getContext('2d');
   const $ = id => document.getElementById(id);
-  const APP_VERSION = '1.1.004'; // shown on the start screen; keep in step with `npm run version:set`
+  const APP_VERSION = '1.1.005'; // shown on the start screen; keep in step with `npm run version:set`
   $('versionLabel').textContent = 'v' + APP_VERSION;
   const ui = {
     hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
@@ -259,6 +259,7 @@ button { touch-action: manipulation; }
   let level = 1, moisture = 100, stateTimer = 0, bannerTimer = 0, seasonTimer = 0, hintOn = true, clock = 0, deathBy = 'dry';
   // Rounds keep getting harder up to MAX_ROUND, then stay at that difficulty.
   const MAX_ROUND = 100;
+  const MAX_WW = 4104; // the bank stops growing here, from round 89
   const SEASON_TIME = 2.4; // seconds a season's title ("Autumn", "Winter") shows before the round banner
 
   // Seasons. Rounds 1–99 are autumn, with the trees turning as the rounds go on. Rounds 100–199 are
@@ -283,7 +284,8 @@ button { touch-action: manipulation; }
     const t = n - SPRING_FROM;
     return { melt: clamp01(1 - t / 5), green: clamp01(t / 40), leafOut: clamp01(t / 50), flood: clamp01(1 - t / 40), blossom: clamp01(1 - Math.abs(n - 240) / 10) };
   }
-  let springGround = '#7c9c52'; // the ground's colour this round, in spring
+  // One warm earthy brown under every season (snow, grass and flowers sit on top of it); spring's mud is wetter.
+  const GROUND_BROWN = '#94764d', GROUND_WET = '#7d6240';
   // Summer (round 300 on): the sun dries the trout 15% faster than at full strength, rising to 25% by 399.
   const summerHeat = () => (season === 'summer' ? 1.15 + 0.1 * clamp01((level - SUMMER_FROM) / 99) : 1);
   // Winter snow, by round (each 0 to 1):
@@ -345,11 +347,11 @@ button { touch-action: manipulation; }
   //  floes    ice floes, rounds 200–215, drifting downstream along the near bank. They all drift together,
   //           so the pattern repeats every FLOE_PERIOD units, and every third slot is left empty: there is
   //           always an open stretch of bank to enter the water by. A floe is solid footing, not water.
-  //  mud      patches that cut a flop's length by 30% when the trout takes off from one.
-  //  puddles  on rainy rounds, a few shallow ones; landing in one gives back some moisture.
-  let floes = [], floeT = 0, mud = [], puddles = [];
+  let floes = [], floeT = 0;
   const FLOE_LAST = 215, FLOE_PERIOD = 1350, FLOE_SLOTS = 9, FLOE_SPEED = 32;
-  const MUD_SLOW = 0.7, PUDDLE_GAIN = 15;
+  // Spring is wet: the whole bank is mud, so every flop is 10% shorter (part of flopScale, so the
+  // dive and lightning warnings lengthen to match), and the trout dries at a quarter of the usual rate.
+  const SPRING_MUD = 0.9, SPRING_DRAIN = 0.8;
   const floeY = f => ((f.y0 + FLOE_SPEED * floeT) % FLOE_PERIOD + FLOE_PERIOD) % FLOE_PERIOD - 170;
   const floeX = (f, y) => shoreAt(y) - f.off; // sits against the near bank, wherever the bank bends
   function floeAt(x, y) {
@@ -359,7 +361,6 @@ button { touch-action: manipulation; }
     }
     return null;
   }
-  const mudAt = (x, y) => mud.some(m => ((x - m.x) / m.rx) ** 2 + ((y - m.y) / m.ry) ** 2 < 1);
   // Summer shade and wind.
   //  shadeTrees  lone shade trees scattered all along the bank (a canopy sprite each); the ground under
   //              one is dark, and a trout standing there dries 40% slower.
@@ -379,7 +380,7 @@ button { touch-action: manipulation; }
   //  bossLook  the arena's look in the current phase: '' (not the finale), 'autumn', 'snow' or 'storm'. The
   //            checks that were winter-only (snow, bare trees, ice) also answer to bossLook 'snow', and
   //            wind also answers to 'storm'.
-  let boss = null, bossLook = '', bossGround = '#7c9c52', bossFlash = 0, bossFlashColor = '255,255,255', bossCrown = null;
+  let boss = null, bossLook = '', bossFlash = 0, bossFlashColor = '255,255,255', bossCrown = null;
   const FINALE_WW = 1100;
   // Storm rounds (the winter snowstorm, rounds 100–199, and the spring thunderstorm, 260–299): the birds
   // shelter, and the storm is the problem. `squall` is null on every other round (and in the finale).
@@ -393,12 +394,17 @@ button { touch-action: manipulation; }
   // Everything gets worse later in the season (`sev`, 0 to 1): stronger, more frequent gusts and strikes.
   let squall = null;
   const stormRound = () => (weather === 'storm' || weather === 'thunder') && season !== 'finale';
-  const STRIKE_R = 70;
+  // Spring lightning, all easing with the storm's severity (0 at round 200, 1 at 299): the warning is
+  // (1 - 0.1 sev) / flopScale but never longer than warnCap, the strike ring widens, and the gap
+  // between strikes shortens (never below gapMin).
+  const LIGHT = { warnCap: [1.2, 0.75], r: [75, 105], gap: [2.4, 3.4], gapEase: 2.6, gapMin: 0.7 };
+  const lerpSev = (pair, sev) => pair[0] + (pair[1] - pair[0]) * sev;
+  const strikeR = () => (squall ? lerpSev(LIGHT.r, squall.sev) : LIGHT.r[0]);
   const GUST_DIRS = [[0, 1], [0, -1], [1, 0], [1, 0], [0.707, 0.707], [0.707, -0.707], [-1, 0]]; // [along the bank..., toward the trees]
   function newSquall(n) {
-    const sev = n >= SPRING_FROM ? clamp01((n - 260) / 39) : clamp01((n - WINTER_FROM) / 99);
+    const sev = n >= SPRING_FROM ? clamp01((n - SPRING_FROM) / 99) : clamp01((n - WINTER_FROM) / 99);
     return { sev, ice: n < SPRING_FROM, state: 'calm', st: rnd(3, 5), wx: 0, wy: 0, env: 0, vx: 0, vy: 0, vsx: 0, vsy: 0, whiteT: rnd(6, 10), whiteAge: 99, whiteEnv: 0,
-      strike: { phase: 'idle', t: 0, lockDur: 1, hold: 0, tx: 0, ty: 0, next: rnd(4, 6), bolt: 0 } };
+      strike: { phase: 'idle', t: 0, lockDur: 1, hold: 0, tx: 0, ty: 0, next: rnd(2.5, 4), bolt: 0 } };
   }
   const stormWhite = () => (squall ? squall.whiteEnv : 0);
   const coldNow = () => winter || bossLook === 'snow';
@@ -429,6 +435,14 @@ button { touch-action: manipulation; }
   let eagles = [], eagleCatcher = null;
 
   const rnd = (a, b) => a + Math.random() * (b - a);
+  // Grass has its own random stream (a small seeded generator), so the extra tufts never shift the
+  // random sequence that lays out everything else in the round.
+  let grassRounds = 0;
+  function grassRng(n) {
+    let a = ((n * 7919 + (++grassRounds) * 104729) ^ 0x5bd1e995) >>> 0;
+    const next = () => { a = (a + 0x6D2B79F5) >>> 0; let x = a; x = Math.imul(x ^ x >>> 15, x | 1); x ^= x + Math.imul(x ^ x >>> 7, x | 61); return ((x ^ x >>> 14) >>> 0) / 4294967296; };
+    return { next, rnd: (lo, hi) => lo + next() * (hi - lo), pick: arr => arr[Math.floor(next() * arr.length)] };
+  }
   // Fisher–Yates: every order equally likely.
   function shuffle(a) {
     for (let i = a.length - 1; i > 0; i--) {
@@ -455,10 +469,11 @@ button { touch-action: manipulation; }
   // (96% in rounds 100–109 … 60% in 190–199 and after). Cold air dries the trout more slowly by
   // the same factor, so a crossing still costs about the same share of its moisture. In spring the
   // thaw brings it back smoothly, from 60% at round 200 to full strength at 250.
-  const flopScale = () => winter ? 1 - 0.04 * (Math.floor((Math.min(level, WINTER_FULL) - WINTER_FROM) / 10) + 1)
+  const thawScale = () => winter ? 1 - 0.04 * (Math.floor((Math.min(level, WINTER_FULL) - WINTER_FROM) / 10) + 1)
     : season === 'spring' ? 0.6 + 0.4 * clamp01((level - SPRING_FROM) / 50) : 1;
+  const flopScale = () => thawScale() * (season === 'spring' ? SPRING_MUD : 1);
   // Rain slows it a little; summer's sun speeds it up, and shade slows it again.
-  const drainRate = () => Math.min(11, 7 + level * 0.4) * flopScale() * sky().drain * summerHeat() * shadeFactor() * finaleCalm();
+  const drainRate = () => Math.min(11, 7 + level * 0.4) * thawScale() * (season === 'spring' ? SPRING_DRAIN : 1) * sky().drain * summerHeat() * shadeFactor() * finaleCalm();
   const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
 
   // ---------- level ----------
@@ -470,9 +485,8 @@ button { touch-action: manipulation; }
     ({ cover, depth: snow, falling: snowfall } = snowAt(n));
     spring = springAt(n);
     dusk = season === 'summer' && Math.random() < duskChance(n); // a summer evening: darker, fewer birds, and a raccoon
-    springGround = shadeHex('#8d7b57', '#7c9c52', spring.green); // mud turning to grass
     // Each round the trout lands 40 units (about 1 ft) farther from the river, up to MAX_ROUND.
-    WW = n >= FINALE_FROM ? FINALE_WW : 600 + (Math.min(n, MAX_ROUND) - 1) * 40; TREES = WW - 52; // the finale's bank is short and wide
+    WW = n >= FINALE_FROM ? FINALE_WW : Math.min(MAX_WW, 600 + (Math.min(n, MAX_ROUND) - 1) * 40); TREES = WW - 52; // the finale's bank is short and wide
     river = { base: rnd(178, 192), amp: Math.min(n * 8, 45), phase: rnd(0, 6), far: 60 };
     place = PLACES[(n - 1) % PLACES.length];
     fish.x = rnd(WW - 130, TREES - 45); fish.y = rnd(260, WH - 170);
@@ -513,7 +527,7 @@ button { touch-action: manipulation; }
     }
     herons = shuffle(logs.filter(heronSafe)).slice(0, wantHerons).map(makeHeron);
     // More springs on wider banks, since the trip takes longer.
-    const ns = n < 2 ? 0 : 1 + Math.floor((WW - 600) / 500);
+    const ns = n < 2 || season === 'spring' ? 0 : 1 + Math.floor((WW - 600) / 500); // no moisture ponds in the wet spring
     for (let i = 0, tries = 0; i < ns && tries < 200; tries++) {
       const r = 78, y = rnd(TOP + r, BOTTOM - r), x = rnd(shoreAt(y) + r + 34, TREES - r - 10);
       if (clearOf(x, y, r)) { springs.push({ x, y, r, water: SPRING_WATER }); i++; }
@@ -555,6 +569,19 @@ button { touch-action: manipulation; }
         for (let b = 0; b < blades; b++) {
           const c = pickOne(spr ? (Math.random() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
           (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * bladeScale });
+        }
+      }
+    }
+    // A second helping of tufts (double the grass) from the grass's own random stream.
+    if (bladeScale > 0.12) {
+      const G = grassRng(n);
+      for (let i = 0; i < tuftCount; i++) {
+        const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300);
+        const straw = !winter && G.next() < fall * 0.7;
+        const blades = 3 + Math.floor(G.next() * 4);
+        for (let b = 0; b < blades; b++) {
+          const c = G.pick(spr ? (G.next() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
+          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * bladeScale });
         }
       }
     }
@@ -657,17 +684,6 @@ button { touch-action: manipulation; }
         floes.push({ y0: k * FLOE_PERIOD / FLOE_SLOTS + rnd(-18, 18), rx, ry: rnd(55, 78) * size, off: rx * 0.9, seed: rnd(0, 6) });
       }
     }
-    // Mud: the most at round 200, thinning to a few by 250 and none after 252; never near where the
-    // trout starts, and never at the water's edge.
-    mud = [];
-    if (spr) {
-      for (let i = Math.round(WW / 600 * 11 * clamp01(1 - (n - SPRING_FROM) / 52)); i > 0; i--) {
-        for (let tries = 0; tries < 12; tries++) {
-          const y = rnd(TOP + 20, BOTTOM - 20), rx = rnd(40, 80), ry = rnd(28, 52), x = rnd(shoreAt(y) + rx + 50, TREES - rx - 10);
-          if (Math.hypot(x - fish.x, y - fish.y) > Math.max(rx, ry) + 90) { mud.push({ x, y, rx, ry }); break; }
-        }
-      }
-    }
     // Fly anglers wading the shallows, spaced well apart. Not in winter, when the river is frozen,
     // nor in the first rounds of spring, while the floes are still drifting by (trout season opens at 205).
     anglers = [];
@@ -697,16 +713,9 @@ button { touch-action: manipulation; }
     makeTeams();
     weather = winter ? rollWeather() : spr ? rollSpringWeather(n) : sum ? rollSummerWeather() : 'clear';
     if (dusk) weather = 'clear'; // evenings are calm and clear
+    wxMemo = { n, weather }; chainWx = retryWx = false;
     squall = stormRound() ? newSquall(n) : null;
     if (squall) { eagles = []; teams = []; herons = []; eagleCatcher = null; } // the eagles, ospreys and herons shelter from the storm
-    // Puddles only after rain: a few, clear of the start spot and the water's edge.
-    puddles = [];
-    if (spr && (weather === 'rain' || weather === 'thunder')) {
-      for (let i = 2 + Math.floor((WW - 600) / 1500), tries = 0; i > 0 && tries < 80; tries++) {
-        const y = rnd(TOP + 20, BOTTOM - 20), r = rnd(26, 40), x = rnd(shoreAt(y) + r + 50, TREES - r - 10);
-        if (Math.hypot(x - fish.x, y - fish.y) > r + 90 && clearOf(x, y, r)) { puddles.push({ x, y, r, armed: true }); i--; }
-      }
-    }
     moisture = 100; bannerTimer = 1.6;
     troutMoved = false; // the round starts on the first flop
     raccoon = dusk ? { active: false, t: rnd(3.5, 5.5), x: 0, y: 0, step: 0 } : null;
@@ -786,7 +795,7 @@ button { touch-action: manipulation; }
     ensureAudio();
     level = savedRound; hintOn = true;
     // The first start plays the bank already built behind the start card; retries build a new one.
-    if (!layoutReady) makeLevel(level);
+    if (!layoutReady) { retryWx = level === wxMemo.n; makeLevel(level); } // a replayed round keeps its weather
     layoutReady = false;
     mode = 'play';
     ui.start.hidden = ui.over.hidden = ui.pause.hidden = ui.end.hidden = true; ui.hud.hidden = false;
@@ -907,7 +916,6 @@ button { touch-action: manipulation; }
       const dot = (dx * squall.wx + dy * squall.wy) / (Math.hypot(dx, dy) || 1);
       if (dot < 0) mag *= 1 + 0.3 * dot * squall.env;
     }
-    if (mud.length && mudAt(fish.x, fish.y)) mag *= MUD_SLOW; // soft ground
     if (tall.length && inTallGrass(fish.x, fish.y)) mag *= TALL_SLOW; // wading through tall grass
     troutMoved = true;
     const d = Math.hypot(dx, dy) || 1;
@@ -1129,11 +1137,16 @@ button { touch-action: manipulation; }
   let weather = 'clear';
   const sky = () => SKY[weather];
   const rollWeather = () => (Math.random() >= 0.25 ? 'clear' : Math.random() < 0.5 ? 'snow' : 'storm');
-  // Spring rounds: mostly clear, one in five rainy, and from round 260 one in seven a thunderstorm.
-  const STORM_FROM = 260;
+  // Spring rounds are never clear: rain, or a thunderstorm (30% of the time, 70% if the round before
+  // was a thunderstorm). Kept in memory only: `wxMemo` is the last round built, `chainWx` is set when
+  // the player moves on to the next round (so Go to round, Start over and the step from winter use
+  // the base chance), and `retryWx` when a lost round is replayed (which keeps its weather).
+  const STORM_CHANCE = 0.3, STORM_AFTER_STORM = 0.7;
+  let wxMemo = { n: 0, weather: '' }, chainWx = false, retryWx = false;
   const rollSpringWeather = n => {
-    const r = Math.random(), storm = n >= STORM_FROM ? 1 / 7 : 0;
-    return r < storm ? 'thunder' : r < storm + 0.2 ? 'rain' : 'clear';
+    if (retryWx && wxMemo.n === n) return wxMemo.weather;
+    const after = chainWx && wxMemo.n === n - 1 && wxMemo.weather === 'thunder';
+    return Math.random() < (after ? STORM_AFTER_STORM : STORM_CHANCE) ? 'thunder' : 'rain';
   };
   // Summer rounds: mostly clear; 15% heat wave, 10% downpour, 10% wind.
   const rollSummerWeather = () => { const r = Math.random(); return r < 0.15 ? 'heat' : r < 0.25 ? 'downpour' : r < 0.35 ? 'wind' : 'clear'; };
@@ -1142,8 +1155,9 @@ button { touch-action: manipulation; }
 
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
-  // Tall grass hides the trout from the birds, like a weaker invisibility bubble (see updateEagle).
-  const visibleTrout = () => (invisible > 0 || (tall.length && inTallGrass(fish.x, fish.y)) ? null : fish);
+  // Tall grass and a shade tree's canopy (while the trout is on the ground under it) hide the trout from the birds, and from herons that have not yet cocked, like a weaker
+  // invisibility bubble (see updateEagle): a bird that has not dropped its ring loses track; a ring already down still strikes.
+  const visibleTrout = () => (invisible > 0 || (tall.length && inTallGrass(fish.x, fish.y)) || (shadeTrees.length && fish.z < 20 && shadeAt(fish.x, fish.y)) ? null : fish);
 
   // Before diving, the eagle circles the trout (for dive().circle seconds), spiralling in from 150 to 55 units.
   const EAGLE_CIRCLE = { from: 150, to: 55, spin: 3.2 };
@@ -1488,7 +1502,8 @@ button { touch-action: manipulation; }
       if (h.t <= 0) {
         h.state = 'strike'; h.t = HERON.strike;
         tone(950, 0.08, 'square', 0.05, 0.5);
-        if (prey && Math.hypot(prey.x - h.tx, prey.y - h.ty) < HERON.hit && prey.z < 25) { heronCatcher = h; lose('heron'); }
+        // once cocked, the strike lands whatever the shade or grass; only the invisibility bubble calls it off
+        if (invisible <= 0 && Math.hypot(fish.x - h.tx, fish.y - h.ty) < HERON.hit && fish.z < 25) { heronCatcher = h; lose('heron'); }
       }
     } else if (h.state === 'strike') {
       h.t -= dt;
@@ -1685,13 +1700,6 @@ button { touch-action: manipulation; }
           if (!reduced && Math.random() < 0.3) burst(fish.x, fish.y, 1, '#d6f1ee', 80);
         }
       }
-      for (const p of puddles) { // landing in a puddle refreshes the trout, once per visit
-        const inside = Math.hypot(fish.x - p.x, fish.y - p.y) < p.r;
-        if (inside && fish.z === 0 && p.armed) {
-          p.armed = false; moisture = Math.min(100, moisture + PUDDLE_GAIN);
-          burst(fish.x, fish.y, 8, '#cfe4ee', 120); tone(520, 0.1, 'sine', 0.08, 0.5);
-        } else if (!inside) p.armed = true;
-      }
       if (floes.length) floeT += dt;
       updatePowerup(dt);
       if (troutMoved) { for (const e of eagles) updateEagle(e, dt); updateTeams(dt); }
@@ -1724,7 +1732,7 @@ button { touch-action: manipulation; }
       if (stateTimer <= 0) {
         if (season === 'finale') startEnding();
         else {
-          level++; makeLevel(level); mode = 'play'; updateHud();
+          level++; chainWx = true; makeLevel(level); mode = 'play'; updateHud();
           announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
         }
       }
@@ -1766,8 +1774,8 @@ button { touch-action: manipulation; }
     return 'rgb(' + a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',') + ')';
   }
 
-  // Autumn grass, winter's dead brown grass, or spring's mud greening over.
-  const groundColor = () => (winter ? '#a2946a' : season === 'spring' ? springGround : season === 'summer' ? '#668f42' : season === 'finale' ? bossGround : '#7c9c52');
+  // One brown under every season; spring's mud is wetter. Grass and snow are drawn on top of it.
+  const groundColor = () => (season === 'spring' ? GROUND_WET : GROUND_BROWN);
   const onScreen = (x, pad) => x > cam - pad && x < cam + view.w + pad;
   const snowColor = a => 'rgba(246,249,251,' + a + ')';
   const SNOW = snowColor(0.92);
@@ -1778,10 +1786,8 @@ button { touch-action: manipulation; }
       ctx.fillStyle = 'rgba(255,255,255,0.05)';
       for (let y = -200; y < WH + 200; y += 60) ctx.fillRect(-2000, y, WW + 4000, 30);
     }
-    drawMud();
     drawGrass(sec);
     drawFlowers();
-    drawPuddles(sec);
     drawShade();
     for (const p of tall) { // the ground under tall grass is darker and damper
       if (!onScreen(p.x, p.rx + 6)) continue;
@@ -1820,26 +1826,6 @@ button { touch-action: manipulation; }
     }
     ctx.globalAlpha = 1;
   }
-  // Mud: dark wet-brown patches with a faint sheen. Puddles: still, shallow water with a slow ripple.
-  function drawMud() {
-    for (const m of mud) {
-      if (!onScreen(m.x, m.rx + 6)) continue;
-      ctx.fillStyle = 'rgba(78,56,34,0.5)'; ctx.beginPath(); ctx.ellipse(m.x, m.y, m.rx, m.ry, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = 'rgba(52,36,22,0.45)'; ctx.beginPath(); ctx.ellipse(m.x, m.y, m.rx * 0.72, m.ry * 0.7, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.ellipse(m.x - m.rx * 0.2, m.y - m.ry * 0.25, m.rx * 0.3, m.ry * 0.16, 0, 0, 7); ctx.fill();
-    }
-  }
-  function drawPuddles(sec) {
-    for (const p of puddles) {
-      if (!onScreen(p.x, p.r + 6)) continue;
-      ctx.fillStyle = 'rgba(96,126,146,0.8)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
-      ctx.fillStyle = 'rgba(176,202,218,0.55)'; ctx.beginPath(); ctx.arc(p.x - p.r * 0.15, p.y - p.r * 0.15, p.r * 0.72, 0, 7); ctx.fill();
-      const k = reduced ? 0.4 : (sec * 0.7 + p.x * 0.013) % 1;
-      ctx.strokeStyle = 'rgba(255,255,255,' + 0.55 * (1 - k) + ')'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(p.x, p.y, 3 + k * p.r * 0.6, 0, 7); ctx.stroke();
-    }
-  }
-
   // Spring wildflowers, small enough to cost a few calls each: bluebells (a nodding spray of blue
   // bells on a curved stem), trillium (three white petals over a yellow heart) and dandelions.
   function drawFlowers() {
@@ -2159,7 +2145,7 @@ button { touch-action: manipulation; }
     return null;
   }
   function setupFinale() {
-    boulders = []; logs = []; springs = []; herons = []; heronCatcher = null; anglers = []; floaters = []; floes = []; mud = []; puddles = [];
+    boulders = []; logs = []; springs = []; herons = []; heronCatcher = null; anglers = []; floaters = []; floes = [];
     tall = []; tallBlades = {}; bars = []; shadeTrees = []; shadePool = []; raccoon = null; powerup.active = false; invisible = 0;
     teams = []; eagleCatcher = null;
     // A 5 x 3 grid of lures, one per cell with a little jitter, so one is never far from any spot on the bank.
@@ -2199,7 +2185,6 @@ button { touch-action: manipulation; }
     const snowy = look === 'snow', stormy = look === 'storm';
     fall = snowy ? 1 : stormy ? 0.55 : 0.8;
     cover = snowy ? 1 : 0; snow = snowy ? 0.7 : 0; snowfall = 0;
-    bossGround = snowy ? '#a2946a' : stormy ? '#5f7a46' : '#7c9c52';
     const LEAFS = snowy ? ['#7a6448', '#6a553c', '#8a7255'] : LEAF_COLORS;
     leaves = Array.from({ length: Math.round(70 * WW / 600 * (snowy ? 0.15 : stormy ? 0.8 : 0.5)) }, () => {
       const y = rnd(-100, WH + 100);
@@ -2214,6 +2199,16 @@ button { touch-action: manipulation; }
       for (let b = 3 + Math.floor(Math.random() * 4); b > 0; b--) {
         const c = pickOne(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
         (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * (snowy ? 0.45 : 1) });
+      }
+    }
+    { // double the grass, from the grass's own random stream
+      const G = grassRng(FINALE_FROM);
+      for (let i = 0; i < tufts; i++) {
+        const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && G.next() < 0.55;
+        for (let b = 3 + Math.floor(G.next() * 4); b > 0; b--) {
+          const c = G.pick(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
+          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * (snowy ? 0.45 : 1) });
+        }
       }
     }
     for (const c in grass) grass[c].sort((p, q) => p.x - q.x);
@@ -2606,16 +2601,16 @@ button { touch-action: manipulation; }
           const aim = eagleAim(0.3);
           const air = fish.z > 0 || fish.vz > 0;
           const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
-          S.tx = aim.x; S.ty = aim.y; S.hold = tLand; S.phase = 'warn'; S.t = S.lockDur = 1.0 - 0.1 * sev + tLand;
+          S.tx = aim.x; S.ty = aim.y; S.hold = tLand; S.phase = 'warn'; S.t = S.lockDur = Math.min(lerpSev(LIGHT.warnCap, sev), (1.0 - 0.1 * sev) / flopScale()) + tLand; // longer when flops are weak, up to the cap
           tone(1500, 0.18, 'triangle', 0.04, 0.7); announce('Lightning!');
         }
       } else {
         S.t -= dt;
         if (S.t <= 0) { // the strike
-          S.phase = 'idle'; S.next = Math.max(2.5, rnd(5.5, 8) - 3 * sev); S.bolt = 0.3;
+          S.phase = 'idle'; S.next = Math.max(LIGHT.gapMin, rnd(LIGHT.gap[0], LIGHT.gap[1]) - LIGHT.gapEase * sev); S.bolt = 0.3;
           lightning.glow = 1; lightning.echo = 0.14;
           burst(S.tx, S.ty, 14, '#fff3a8', 260); tone(70, 0.6, 'sawtooth', 0.08, 0.5);
-          if (Math.hypot(fish.x - S.tx, fish.y - S.ty) < STRIKE_R && fish.z < EAGLE.reachZ) lose('lightning');
+          if (Math.hypot(fish.x - S.tx, fish.y - S.ty) < strikeR() && fish.z < EAGLE.reachZ) lose('lightning');
         }
       }
     }
@@ -2627,11 +2622,11 @@ button { touch-action: manipulation; }
     ctx.save(); worldTransform();
     if (S.phase === 'warn') {
       const k = Math.min(1, 1 - S.t / S.lockDur);
-      ctx.fillStyle = 'rgba(255,244,150,' + (0.1 + 0.14 * k) + ')'; ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(255,244,150,' + (0.1 + 0.14 * k) + ')'; ctx.beginPath(); ctx.arc(S.tx, S.ty, strikeR(), 0, 7); ctx.fill();
       ctx.strokeStyle = 'rgba(30,38,80,0.55)'; ctx.lineWidth = 6; ctx.setLineDash([8, 6]);
-      ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(S.tx, S.ty, strikeR(), 0, 7); ctx.stroke();
       ctx.strokeStyle = 'rgba(255,232,90,' + (0.55 + 0.4 * k) + ')'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(S.tx, S.ty, STRIKE_R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(S.tx, S.ty, strikeR(), 0, 7); ctx.stroke(); ctx.setLineDash([]);
     }
     if (S.bolt > 0) { // a jagged bolt from the sky to where the strike landed
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -3236,8 +3231,12 @@ button { touch-action: manipulation; }
     const cocked = h.state === 'cock' && mode === 'play';
     ctx.save();
     ctx.translate(h.x, h.y);
-    if (mode === 'play' && visibleTrout() && (cocked || near < HERON.reach + 90)) {
+    if (mode === 'play' && (cocked || (visibleTrout() && near < HERON.reach + 90))) {
       const k = cocked ? 1 : Math.min(1, 1 - (near - HERON.reach) / 90);
+      if (cocked) { // a pale underlay first, as under the eagle rings, so the red reads on brown
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 6; ctx.setLineDash([6, 6]);
+        ctx.beginPath(); ctx.arc(0, 0, HERON.reach, 0, Math.PI * 2); ctx.stroke();
+      }
       ctx.strokeStyle = cocked ? 'rgba(200,65,47,0.85)' : 'rgba(250,249,243,' + 0.55 * k + ')';
       ctx.lineWidth = 2.5; ctx.setLineDash([6, 6]);
       ctx.beginPath(); ctx.arc(0, 0, HERON.reach, 0, Math.PI * 2); ctx.stroke();
@@ -3266,6 +3265,8 @@ button { touch-action: manipulation; }
     ctx.beginPath(); ctx.arc(hx + 2, -2.6, 1.3, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     if (cocked) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(h.tx, h.ty, HERON.hit, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = 'rgba(200,65,47,0.9)'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(h.tx, h.ty, HERON.hit, 0, Math.PI * 2); ctx.stroke();
     }

@@ -15,7 +15,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 | Path | What it is |
 |---|---|
 | `flop-home.html` | **The game.** All HTML, CSS and JS in one file. Edit this. |
-| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.006 build 6) |
+| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.007 build 7) |
 | `trout-trot-app/www/index.html` | Generated from `flop-home.html` by `npm run build`. Never edit by hand. |
 | `trout-trot-app/scripts/` | `build-www.mjs`, `make-icons.mjs`, `fetch-fonts.mjs`, `set-version.mjs` |
 | `trout-trot-app/README.md` | App commands and the Android release steps |
@@ -48,6 +48,10 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
   - Pause menu: Go to round, 1–400.
 - **Back (Android):** the native app handles the back button and edge-swipe back gesture through Capacitor's App plugin (absent in the plain web build, which skips it): in a round it pauses, when paused it resumes, during the ending it skips the scene, and on the start screen, the game-over card and the ending card it asks "Leave Trout Trot?" (Stay / Leave). `MainActivity.java` also asks Android (API 29+) to leave a 200 dp strip on each side edge to the app, so edge swipes in play reach the game instead of being the back gesture.
 - **Ground and grass (v1.1.005):** one warm brown (`GROUND_BROWN` #94764d) under every season and the finale, wetter in spring (`GROUND_WET` #7d6240); snow, grass and flowers sit on top. Every season has double the grass tufts: the original tufts are generated as before, and the extra ones come from the grass's own seeded random stream (`grassRng`), so the rest of a round's layout, weather and birds are unchanged.
+- **Grass drawing (v1.1.007):** looks only; layouts and random streams are unchanged.
+  - Blades (short grass, finale grass, tall grass) are prepared once at build by `finishBlades` (angle, offsets, wave phases); `bladePath` draws each as two straight segments (base, the old curve's midpoint, tip) with butt caps, and the caps are reset to round afterwards. The sway reads a 256-entry sine table (`SINT`); wind and storm lean still apply.
+  - Safety net: `trackFrame` smooths the frame interval (`FRAME_EASE`). Above `GRASS_SLOW_MS` 20 for `GRASS_SLOW_HOLD` 1 s, blades flagged `extra` (the second v1.1.005 loop) are skipped (`grassThin`); back under `GRASS_FAST_MS` 17.5 for `GRASS_FAST_HOLD` 2 s they return. 17.5, not 15, because a 60 Hz frame is 16.7 ms. `window.__grass()` reports `{thin, frameMs, chunks}`.
+  - Reduced motion: with no wind or storm lean, `drawGrassStill` draws the still grass once into 512-unit chunk canvases at the screen's pixel scale (`GRASS_CHUNK`), keeps only the chunks on screen, and blits them. The cache key is the `grass` object and the scale, so a new round, finale phase, resize or dpr change rebuilds it. Tall grass is not cached.
 - **Charms (v1.1.006):** four bonuses that stack, kept in localStorage `trout-trot-charms` (a JSON list of ids; missing or corrupt data counts as none, unknown ids are dropped) next to the saved round.
   - **Keen Eye** (`eyeBonus`, +0.2 s on every warning, added after any cap): `diveWarn` (eagles, pairs, trio rings), the osprey warning, the Great Eagle's `P.warn`, the lightning warning (after `LIGHT`'s cap) and the heron's cock time.
   - **Thick Skin** (`SKIN_DRAIN` 0.9): the last factor in `drainRate`.
@@ -120,6 +124,7 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
 
 ## State
 
-- **Last commit:** `v1.1.006` (build 6): the four charms (Keen Eye, Thick Skin, Slick Scales, Lucky Fin) with the picker, saved charms, effects, icons and the privacy policy row, on top of `v1.1.005`. Nothing is uncommitted. Not yet reviewed on a device or released.
+- **Last commit:** `v1.1.006` (build 6): the four charms (Keen Eye, Thick Skin, Slick Scales, Lucky Fin) with the picker, saved charms, effects, icons and the privacy policy row, on top of `v1.1.005`. Not yet reviewed on a device or released.
+- **In the working tree, not committed:** `v1.1.007` (build 7), cheaper grass drawing (see Grass drawing). Smoke-tested only; the chunk cache's softness at dpr 2 and the real frame cost are unchecked on a device.
 - **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding, summer frame rate (draw work is about 30–60% above late spring: tall grass blades, canopies and floaters are the likely costs) and whether summer routes feel fair now that a trout needs a spring stop on the way. iOS "1.1.003" is likely read as 1.1.3 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

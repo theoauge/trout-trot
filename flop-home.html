@@ -249,7 +249,7 @@ button { touch-action: manipulation; }
   const cv = document.getElementById('game');
   const ctx = cv.getContext('2d');
   const $ = id => document.getElementById(id);
-  const APP_VERSION = '1.1.006'; // shown on the start screen; keep in step with `npm run version:set`
+  const APP_VERSION = '1.1.007'; // shown on the start screen; keep in step with `npm run version:set`
   $('versionLabel').textContent = 'v' + APP_VERSION;
   const ui = {
     hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
@@ -433,6 +433,49 @@ button { touch-action: manipulation; }
   let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [];
   let anglers = [], talus = [], cedars = [], ripples = [], drifts = [], holes = [], cracks = [], flakes = [], place = '';
   let grass = {}; // grass blades, grouped by color so each color draws as one path
+  // Grass drawing (v1.1.007). Blades are prepared once when a round is built (angle, offsets, wave phases);
+  // each frame only the sway changes, read from a sine table. Two straight segments per blade, butt caps.
+  const SINT = Array.from({ length: 256 }, (_, i) => Math.sin(i * Math.PI / 128)), SIN_K = 128 / Math.PI; // 256 steps round the circle
+  const GRASS_WAVE = { kx: 0.012, ky: 0.004, k2: 0.03, a1: 0.45, a2: 0.15, r1: 1.8, r2: 0.7, kd: 12 };
+  const TALL_WAVE = { kx: 0.02, ky: 0.006, k2: 0.05, a1: 0.55, a2: 0.18, r1: 1.6, r2: 0.8, kd: 20 };
+  // Safety net: if the smoothed frame interval stays slow for a while, the extra (v1.1.005) tufts are skipped
+  // until frames are healthy again. Looks only; never touches gameplay. 17.5 ms is a full 60 fps frame.
+  const GRASS_SLOW_MS = 20, GRASS_SLOW_HOLD = 1, GRASS_FAST_MS = 17.5, GRASS_FAST_HOLD = 2, FRAME_EASE = 0.1;
+  // Reduced motion: still grass is drawn once into chunks about one screen wide and blitted.
+  const GRASS_CHUNK = 512, GRASS_Y0 = -110, GRASS_H = 1040;
+  let frameMs = 16.7, grassThin = false, grassTimer = 0, grassCache = null, dprNow = 1;
+  window.__grass = () => ({ thin: grassThin, frameMs, chunks: grassCache ? grassCache.chunks.size : 0 }); // for the bot tester
+  function finishBlades(set, w) {
+    for (const c in set) {
+      const list = set[c];
+      list.sort((p, q) => p.x - q.x);
+      for (const g of list) {
+        const base = -Math.PI / 2 + g.a, q = g.len * 0.25;
+        g.ba = base; g.ca = Math.cos(base); g.sa = Math.sin(base);
+        g.q = q; g.qa = q * g.ca; g.qs = q * g.sa; g.h = g.len * 0.5; g.k = g.len / w.kd;
+        g.p1 = (g.x * w.kx + g.y * w.ky) * SIN_K + 512; g.p2 = g.x * w.k2 * SIN_K + 512;
+      }
+    }
+  }
+  // Adds the blades between x0 and x1 to the current path: base, the middle of the bent blade, tip.
+  function bladePath(c2, blades, x0, x1, t, still, lx, ly, skipExtra, w) {
+    const o1 = (t * w.r1 * SIN_K) % 256, o2 = (t * w.r2 * SIN_K) % 256;
+    let lo = 0, hi = blades.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (blades[mid].x > x0) hi = mid; else lo = mid + 1; }
+    for (let i = lo; i < blades.length; i++) {
+      const g = blades[i];
+      if (g.x >= x1) break;
+      if (skipExtra && g.extra) continue;
+      let ct = g.ca, st = g.sa;
+      if (!still) {
+        const tip = g.ba + (SINT[((g.p1 - o1) | 0) & 255] * w.a1 + SINT[((g.p2 + o2) | 0) & 255] * w.a2) * g.k;
+        ct = Math.cos(tip); st = Math.sin(tip);
+      }
+      c2.moveTo(g.x, g.y);
+      c2.lineTo(g.x + g.qa + g.q * ct + lx * g.h, g.y + g.qs + g.q * st + ly * g.h);
+      c2.lineTo(g.x + ct * g.len + lx * g.len, g.y + st * g.len + ly * g.len);
+    }
+  }
   let snowGrain = null; // repeating speckle texture for winter snow, made once per round
   let flowers = []; // spring wildflowers: { kind, x, y, a }
   // Spring ground and river (rounds 200+).
@@ -673,12 +716,12 @@ button { touch-action: manipulation; }
         const blades = 3 + Math.floor(G.next() * 4);
         for (let b = 0; b < blades; b++) {
           const c = G.pick(spr ? (G.next() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
-          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * bladeScale });
+          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * bladeScale, extra: true });
         }
       }
     }
     // Sorted by x so drawGrass can find the blades on screen without visiting all of them.
-    for (const c in grass) grass[c].sort((p, q) => p.x - q.x);
+    finishBlades(grass, GRASS_WAVE);
     // Winter drifts: scattered at 10% coverage, larger and more numerous until they merge.
     // In early spring the last of the snow is a few small, shrinking patches.
     drifts = winter ? Array.from({ length: Math.round(WW / 600 * (14 + 30 * cover)) }, () => {
@@ -755,7 +798,7 @@ button { touch-action: manipulation; }
           (tallBlades[c] = tallBlades[c] || []).push({ x: p.x + Math.cos(a) * p.rx * d, y: p.y + Math.sin(a) * p.ry * d, a: rnd(-0.4, 0.4), len: rnd(24, 40) });
         }
       }
-      for (const c in tallBlades) tallBlades[c].sort((p, q) => p.x - q.x);
+      finishBlades(tallBlades, TALL_WAVE);
       // Gravel bars: 6–8 shoals, each 120–220 units long and pushing the water's edge out 28–50 units.
       for (let i = 6 + Math.floor(Math.random() * 3); i > 0; i--) bars.push({ y: rnd(TOP + 40, BOTTOM - 40), len: rnd(120, 220), h: rnd(28, 50), seed: rnd(0, 6) });
       // Three canoes and four tubers, spread along the river, all drifting downstream.
@@ -821,7 +864,7 @@ button { touch-action: manipulation; }
 
   // ---------- sizing ----------
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = dprNow = Math.min(window.devicePixelRatio || 1, 2);
     W = cv.clientWidth; H = cv.clientHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2038,26 +2081,45 @@ button { touch-action: manipulation; }
   function drawGrass(sec) {
     const t = reduced ? 0 : sec;
     const windLean = windy() ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
-    const leanX = squall ? squall.vx * 1.5 : 0, leanY = squall ? squall.vy * 1.5 : 0; // in a storm they flatten along the gust
-    ctx.lineWidth = 2; ctx.lineCap = 'round';
+    const leanX = squall ? squall.vx * 1.5 : 0, leanY = (squall ? squall.vy * 1.5 : 0) + windLean; // in a storm they flatten along the gust
+    if (reduced && !leanX && !leanY && drawGrassStill()) return; // nothing moves: blit the cached chunks
+    ctx.lineWidth = 2; ctx.lineCap = 'butt';
     for (const c in grass) {
       ctx.strokeStyle = c;
       ctx.beginPath();
-      const blades = grass[c];
-      // The blades are sorted by x: skip to the first one on screen and stop at the last.
-      let lo = 0, hi = blades.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (blades[mid].x > cam - 20) hi = mid; else lo = mid + 1; }
-      for (let i = lo; i < blades.length; i++) {
-        const g = blades[i];
-        if (g.x >= cam + view.w + 20) break;
-        const gust = reduced ? 0 : Math.sin(g.x * 0.012 - t * 1.8 + g.y * 0.004) * 0.45 + Math.sin(t * 0.7 + g.x * 0.03) * 0.15;
-        const base = -Math.PI / 2 + g.a, tip = base + gust * (g.len / 12);
-        const mx = g.x + Math.cos(base) * g.len * 0.5, my = g.y + Math.sin(base) * g.len * 0.5;
-        ctx.moveTo(g.x, g.y);
-        ctx.quadraticCurveTo(mx + leanX * g.len * 0.5, my + windLean * g.len * 0.5 + leanY * g.len * 0.5, g.x + Math.cos(tip) * g.len + leanX * g.len, g.y + Math.sin(tip) * g.len + windLean * g.len + leanY * g.len);
-      }
+      bladePath(ctx, grass[c], cam - 20, cam + view.w + 20, t, reduced, leanX, leanY, grassThin, GRASS_WAVE);
       ctx.stroke();
     }
+    ctx.lineCap = 'round'; // what the draws after it have always started from
+  }
+
+  // With reduced motion and no wind or storm the grass holds still, so each chunk of the bank is drawn once
+  // at the screen's pixel scale and then copied. Rebuilt when the round, the finale phase (both make a new
+  // `grass`), the window or the pixel ratio changes; chunks off screen are dropped to keep memory small.
+  function drawGrassStill() {
+    const sc = dprNow * view.s;
+    if (!(sc > 0)) return false;
+    if (!grassCache || grassCache.ref !== grass || grassCache.sc !== sc) grassCache = { ref: grass, sc, chunks: new Map() };
+    const chunks = grassCache.chunks, k0 = Math.floor((cam - 20) / GRASS_CHUNK), k1 = Math.floor((cam + view.w + 20) / GRASS_CHUNK);
+    for (const k of [...chunks.keys()]) if (k < k0 || k > k1) chunks.delete(k);
+    for (let k = k0; k <= k1; k++) {
+      let c = chunks.get(k);
+      if (!c) {
+        c = document.createElement('canvas');
+        c.width = Math.ceil(GRASS_CHUNK * sc); c.height = Math.ceil(GRASS_H * sc);
+        const g = c.getContext('2d');
+        g.setTransform(sc, 0, 0, sc, -k * GRASS_CHUNK * sc, -GRASS_Y0 * sc);
+        g.lineWidth = 2; g.lineCap = 'butt';
+        for (const col in grass) {
+          g.strokeStyle = col; g.beginPath();
+          bladePath(g, grass[col], k * GRASS_CHUNK - 30, (k + 1) * GRASS_CHUNK + 30, 0, true, 0, 0, false, GRASS_WAVE);
+          g.stroke();
+        }
+        chunks.set(k, c);
+      }
+      ctx.drawImage(c, k * GRASS_CHUNK, GRASS_Y0, c.width / sc, c.height / sc);
+    }
+    return true;
   }
 
   function drawRiver(sec) {
@@ -2152,23 +2214,13 @@ button { touch-action: manipulation; }
   function drawTall(sec) {
     if (!tall.length) return;
     const t = reduced ? 0 : sec;
-    ctx.globalAlpha = 0.68; ctx.lineWidth = 2.6; ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.68; ctx.lineWidth = 2.6; ctx.lineCap = 'butt';
     for (const c in tallBlades) {
       ctx.strokeStyle = c; ctx.beginPath();
-      const blades = tallBlades[c];
-      let lo = 0, hi = blades.length;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (blades[mid].x > cam - 30) hi = mid; else lo = mid + 1; }
-      for (let i = lo; i < blades.length; i++) {
-        const g = blades[i];
-        if (g.x >= cam + view.w + 30) break;
-        const sway = reduced ? 0 : Math.sin(g.x * 0.02 - t * 1.6 + g.y * 0.006) * 0.55 + Math.sin(t * 0.8 + g.x * 0.05) * 0.18;
-        const base = -Math.PI / 2 + g.a, tip = base + sway * (g.len / 20);
-        ctx.moveTo(g.x, g.y);
-        ctx.quadraticCurveTo(g.x + Math.cos(base) * g.len * 0.5, g.y + Math.sin(base) * g.len * 0.5, g.x + Math.cos(tip) * g.len, g.y + Math.sin(tip) * g.len);
-      }
+      bladePath(ctx, tallBlades[c], cam - 30, cam + view.w + 30, t, reduced, 0, 0, false, TALL_WAVE);
       ctx.stroke();
     }
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = 1; ctx.lineCap = 'round';
   }
 
   // Gravel bars: a pale shoal against the bank, reaching out into the river exactly as far as barAt() says
@@ -2311,11 +2363,11 @@ button { touch-action: manipulation; }
         const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && G.next() < 0.55;
         for (let b = 3 + Math.floor(G.next() * 4); b > 0; b--) {
           const c = G.pick(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
-          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * (snowy ? 0.45 : 1) });
+          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * (snowy ? 0.45 : 1), extra: true });
         }
       }
     }
-    for (const c in grass) grass[c].sort((p, q) => p.x - q.x);
+    finishBlades(grass, GRASS_WAVE);
     drifts = snowy ? Array.from({ length: Math.round(WW / 600 * 44) }, () => {
       const y = rnd(-100, WH + 100);
       return { x: rnd(shoreAt(y) + 10, WW + 300), y, rx: rnd(26, 60) * 1.8, ry: rnd(16, 34) * 1.8, a: rnd(0, 3) };
@@ -3637,12 +3689,21 @@ button { touch-action: manipulation; }
 
   // ---------- loop ----------
   let last = performance.now();
+  // Smoothed frame interval -> grassThin, with a delay each way so it doesn't flicker. Paused or hidden gaps don't count.
+  function trackFrame(ms) {
+    if (!(ms > 0 && ms < 100) || mode === 'paused') return;
+    frameMs += (ms - frameMs) * FRAME_EASE;
+    const want = grassThin ? frameMs < GRASS_FAST_MS : frameMs > GRASS_SLOW_MS;
+    grassTimer = want ? grassTimer + ms / 1000 : 0;
+    if (grassTimer >= (grassThin ? GRASS_FAST_HOLD : GRASS_SLOW_HOLD)) { grassThin = !grassThin; grassTimer = 0; }
+  }
   function frame(now) {
     // Schedule the next frame first, so one bad frame can't freeze the game.
     requestAnimationFrame(frame);
     // A frame's timestamp can be a little earlier than the time recorded at start-up or on resume;
     // never let the game clock step backward (negative sizes would follow, which canvas rejects).
     const dt = Math.max(0, Math.min(0.033, (now - last) / 1000));
+    trackFrame(now - last);
     last = now;
     if (mode !== 'paused') update(dt);
     draw(now);

@@ -58,6 +58,22 @@ button { touch-action: manipulation; }
 .stats b { font-family: var(--display); font-weight: 600; color: var(--river); text-align: right; white-space: nowrap; }
 .card .stats-note, .card .credits { font-size: 12px; max-width: none; line-height: 1.4; }
 .card .credits { padding-top: 6px; border-top: 1px solid var(--line); }
+.charms { display: flex; gap: 5px; }
+.charms:empty { display: none; }
+.charms svg, .charm-card svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.c-eye { color: #2c6f74; } .c-skin { color: #8a5a2b; } .c-scales { color: #5a7f3a; } .c-fin { color: #c58a14; }
+.charm-list { display: grid; gap: 8px; width: 100%; }
+.charm-card {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; text-align: left;
+  width: 100%; box-sizing: border-box; padding: 12px 14px; border: 2px solid var(--line); border-radius: 16px;
+  background: #fff; font: inherit; cursor: pointer;
+}
+.charm-card svg { grid-row: span 2; width: 34px; height: 34px; }
+.charm-card b { font-family: var(--display); font-weight: 600; font-size: 20px; line-height: 1.1; color: var(--ink); }
+.charm-card span { font-size: 14px; line-height: 1.35; color: var(--muted); }
+.charm-card:hover { border-color: var(--river); }
+.charm-card:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.card .charm-line { font-size: 13px; max-width: none; }
 .feathers { display: flex; gap: 4px; }
 .feathers svg { width: 18px; height: 18px; stroke-width: 1.6; }
 .feathers .on { fill: #e2a93b; stroke: #6b4a14; }
@@ -149,6 +165,7 @@ button { touch-action: manipulation; }
     <div class="row"><span class="label">Moisture</span><span class="label power" id="powerLabel" hidden>Invisible</span></div>
     <div class="bar"><div class="fill" id="fill"></div></div>
     <div class="feathers" id="feathers" hidden></div>
+    <div class="charms" id="charmIcons"></div>
   </div>
   <button class="icon-btn" id="pauseBtn" aria-label="Pause">II</button>
 </div>
@@ -169,6 +186,7 @@ button { touch-action: manipulation; }
 <div class="overlay" id="pauseScreen" role="dialog" aria-modal="true" aria-labelledby="pauseTitle" hidden>
   <div class="card">
     <h2 id="pauseTitle">Paused</h2>
+    <p class="charm-line" id="pauseCharms" hidden></p>
     <button class="play" id="resumeBtn">Resume</button>
     <form class="goto" id="gotoForm" novalidate>
       <label class="label" for="gotoInput">Go to round</label>
@@ -203,6 +221,7 @@ button { touch-action: manipulation; }
     <p id="endSub">The Great Eagle is beaten, and the river is yours.</p>
     <div class="stats" id="endStats"></div>
     <p class="stats-note" id="endNote"></p>
+    <p class="stats-note" id="endCharms" hidden></p>
     <button class="play" id="fightBtn">Fight again</button>
     <form class="goto" id="endGoto" novalidate>
       <label class="label" for="endGotoInput">Go to round</label>
@@ -217,24 +236,36 @@ button { touch-action: manipulation; }
   </div>
 </div>
 
+<div class="overlay" id="charmScreen" role="dialog" aria-modal="true" aria-labelledby="charmTitle" hidden>
+  <div class="card">
+    <h2 id="charmTitle">Choose a charm</h2>
+    <p id="charmSub">Pick one to carry with you.</p>
+    <div class="charm-list" id="charmList"></div>
+  </div>
+</div>
+
 <script>
 (() => {
   const cv = document.getElementById('game');
   const ctx = cv.getContext('2d');
   const $ = id => document.getElementById(id);
-  const APP_VERSION = '1.1.005'; // shown on the start screen; keep in step with `npm run version:set`
+  const APP_VERSION = '1.1.006'; // shown on the start screen; keep in step with `npm run version:set`
   $('versionLabel').textContent = 'v' + APP_VERSION;
   const ui = {
     hud: $('hud'), round: $('roundValue'), fill: $('fill'), meter: $('meter'), power: $('powerLabel'),
     start: $('startScreen'), pause: $('pauseScreen'), over: $('overScreen'), overTitle: $('overTitle'),
-    overRound: $('overRound'), feathers: $('feathers'), end: $('endScreen'), leave: $('leaveScreen')
+    overRound: $('overRound'), feathers: $('feathers'), charm: $('charmScreen'), end: $('endScreen'), leave: $('leaveScreen')
   };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Screen reader announcements. Clearing first makes a repeated message (another +1) read again.
   const announcer = $('announcer');
+  // Messages sent in the same moment are read together, in order, instead of the last one replacing the rest.
+  let announceQ = [], announceTimer = null;
   function announce(msg) {
+    announceQ.push(msg);
+    if (announceTimer) return;
     announcer.textContent = '';
-    setTimeout(() => { announcer.textContent = msg; }, 50);
+    announceTimer = setTimeout(() => { announcer.textContent = announceQ.join(' '); announceQ = []; announceTimer = null; }, 50);
   }
 
   // Top-down world, 860 tall; the bank widens every round (WW) and the camera scrolls sideways
@@ -303,6 +334,78 @@ button { touch-action: manipulation; }
   function saveRound(n) {
     savedRound = n;
     try { localStorage.setItem(SAVE_KEY, String(n)); } catch (e) {}
+  }
+  // ---------- charms ----------
+  // Four charms, earned one at a time (a choice of the ones not yet owned) after clearing rounds 99, 199,
+  // 299 and 399, and kept with the player's progress. They stack. Start over clears them; Go to round
+  // clears them and asks for the normal number for that round (charmCount).
+  const focusPlay = () => { try { $('pauseBtn').focus({ preventScroll: true }); } catch (e) {} }; // after a picker closes mid-run
+  const SVG = d => '<svg viewBox="0 0 24 24" aria-hidden="true">' + d + '</svg>';
+  const CHARMS = {
+    eye: { name: 'Keen Eye', text: 'Warning rings appear 0.2 s sooner.', icon: SVG('<path d="M2 12c3.5-5.5 8-7 10-7s6.5 1.5 10 7c-3.5 5.5-8 7-10 7s-6.5-1.5-10-7z"/><circle cx="12" cy="12" r="3.2"/>') },
+    skin: { name: 'Thick Skin', text: 'You dry out 10% slower.', icon: SVG('<path d="M12 3l8 3v5.5c0 4.5-3.2 8-8 9.5-4.8-1.5-8-5-8-9.5V6z"/><path d="M12 8v8M8.5 12h7"/>') },
+    scales: { name: 'Slick Scales', text: 'Your flops go 10% farther.', icon: SVG('<path d="M3 15a5 5 0 0 1 10 0M11 15a5 5 0 0 1 10 0M7 9.5a5 5 0 0 1 10 0"/>') },
+    fin: { name: 'Lucky Fin', text: 'A 15% chance to slip free when caught.', icon: SVG('<path d="M3 19C5 9 11 4 21 5c-1 8-6 13-18 14z"/><path d="M8 15c3-1 6-4 8-7"/>') }
+  };
+  const CHARM_IDS = Object.keys(CHARMS);
+  const CHARM_KEY = 'trout-trot-charms';
+  const EYE_BONUS = 0.2, SKIN_DRAIN = 0.9, SLICK_FLOP = 1.1, FIN_CHANCE = 0.15, FIN_GRACE = 0.5;
+  let charms = [];
+  try {
+    const c = JSON.parse(localStorage.getItem(CHARM_KEY) || 'null');
+    if (Array.isArray(c)) charms = CHARM_IDS.filter(id => c.includes(id));
+  } catch (e) {}
+  const has = id => charms.includes(id);
+  const eyeBonus = () => (has('eye') ? EYE_BONUS : 0); // added to every warning, after any cap
+  const charmCount = n => (n < 100 ? 0 : n < 200 ? 1 : n < 300 ? 2 : n < 400 ? 3 : 4); // the normal number to own at round n
+  const charmsDue = n => Math.max(0, charmCount(n) - charms.length);
+  function saveCharms() { try { localStorage.setItem(CHARM_KEY, JSON.stringify(charms)); } catch (e) {} }
+  function clearCharms() { charms = []; saveCharms(); updateCharmIcons(); }
+  const charmNames = () => charms.map(id => CHARMS[id].name).join(', ');
+  function updateCharmIcons() {
+    $('charmIcons').innerHTML = charms.map(id => '<span class="c-' + id + '" title="' + CHARMS[id].name + '">' + CHARMS[id].icon + '</span>').join('');
+    if (charms.length) { $('charmIcons').setAttribute('role', 'img'); $('charmIcons').setAttribute('aria-label', 'Charms: ' + charmNames()); }
+    else { $('charmIcons').removeAttribute('role'); $('charmIcons').removeAttribute('aria-label'); }
+  }
+  // Lucky Fin: each time the trout would be caught or struck, 15% to slip free. A save is followed by a
+  // short grace so the same strike cannot roll again. Never applies to drying out.
+  let finGrace = -1, finT = 0;
+  function luckyFin() {
+    if (!has('fin')) return false;
+    if (clock < finGrace) return true;
+    if (Math.random() >= FIN_CHANCE) return false;
+    finGrace = clock + FIN_GRACE; finT = 1.4;
+    burst(fish.x, fish.y, 14, '#ffe27a', 220);
+    tone(1320, 0.16, 'sine', 0.07, 0.6); tone(1760, 0.2, 'sine', 0.05, 0.6);
+    announce('Lucky Fin!');
+    return true;
+  }
+  // The picker: asks for one of the charms not yet owned until the player has the normal number for round n,
+  // then calls done(). A lone remaining charm is simply awarded ("You earned"); when every remaining charm
+  // is due at once (round 400), they are all granted without asking.
+  function openCharmPicker(n, done) {
+    const due = charmsDue(n), rem = CHARM_IDS.filter(id => !has(id));
+    if (due <= 0 || !rem.length) { ui.charm.hidden = true; if (done) done(); return; }
+    if (rem.length === due && due > 1) {
+      charms = charms.concat(rem); saveCharms(); updateCharmIcons();
+      ui.charm.hidden = true; announce('All four charms are yours.'); if (done) done(); return;
+    }
+    const one = rem.length === 1;
+    $('charmTitle').textContent = one ? 'You earned a charm' : 'Choose a charm';
+    $('charmSub').textContent = one ? 'The last one is yours.' : 'Pick one to carry with you.';
+    const list = $('charmList');
+    list.innerHTML = rem.map(id => '<button type="button" class="charm-card c-' + id + '" data-charm="' + id + '">' + CHARMS[id].icon +
+      '<b>' + CHARMS[id].name + '</b><span>' + CHARMS[id].text + '</span></button>').join('');
+    list.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      const id = b.getAttribute('data-charm');
+      if (!has(id)) charms.push(id);
+      saveCharms(); updateCharmIcons();
+      announce(CHARMS[id].name + '. ' + CHARMS[id].text);
+      openCharmPicker(n, done);
+    }));
+    ui.charm.hidden = false;
+    announce((one ? 'You earned a charm: ' : 'Choose a charm: ') + rem.map(id => CHARMS[id].name).join(', ') + '.');
+    const first = list.querySelector('button'); if (first) first.focus();
   }
   // Run stats, shown on the ending card: rounds cleared by playing (a jump with Go to round adds none),
   // flops, times lost (caught, or dried out) and time played. They count from the version that added them,
@@ -462,7 +565,7 @@ button { touch-action: manipulation; }
     : season === 'spring' ? 0.6 + 0.4 * clamp01((level - SPRING_FROM) / 50) : 1;
   const flopScale = () => thawScale() * (season === 'spring' ? SPRING_MUD : 1);
   // Rain slows it a little; summer's sun speeds it up, and shade slows it again.
-  const drainRate = () => Math.min(11, 7 + level * 0.4) * thawScale() * (season === 'spring' ? SPRING_DRAIN : 1) * sky().drain * summerHeat() * shadeFactor() * finaleCalm();
+  const drainRate = () => Math.min(11, 7 + level * 0.4) * thawScale() * (season === 'spring' ? SPRING_DRAIN : 1) * sky().drain * summerHeat() * shadeFactor() * finaleCalm() * (has('skin') ? SKIN_DRAIN : 1);
   const LEAF_COLORS = ['#d9822b', '#c4502e', '#e8b33c', '#a8442a', '#d99a3a'];
 
   // ---------- level ----------
@@ -798,6 +901,7 @@ button { touch-action: manipulation; }
     pausedFrom = mode; mode = 'paused'; queuedFlop = null; ptr = null;
     gotoInput.value = Math.min(savedRound, MAX_PICK); disarmGoto();
     lightning.glow = 0; lightning.echo = 0; // no flash left on screen while paused
+    $('pauseCharms').hidden = !charms.length; $('pauseCharms').textContent = 'Charms: ' + charmNames();
     ui.pause.hidden = false; $('resumeBtn').focus();
   }
   // Pause menu "Go to round": any whole number from 1 to MAX_PICK. Starts that round straight away
@@ -820,19 +924,23 @@ button { touch-action: manipulation; }
     }
     if (n < savedRound && gotoArmed !== n) {
       gotoArmed = n;
-      err.textContent = 'Tap Go again: your progress goes back from round ' + savedRound + ' to ' + n + '.';
+      err.textContent = 'Tap Go again: your progress goes back from round ' + savedRound + ' to ' + n + ', and your charms reset.';
       err.hidden = false;
       return;
     }
     disarmGoto(); err.hidden = true; err.textContent = GOTO_RANGE_TEXT; input.blur();
     saveRound(n);
     level = n; hintOn = true;
-    makeLevel(n);
-    mode = 'play'; layoutReady = false;
+    clearCharms(); // a jump starts the charms again: the player picks the normal number for that round
     ui.pause.hidden = true; ui.end.hidden = true; ui.hud.hidden = false;
-    last = performance.now();
-    updateHud();
-    announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+    const go = () => {
+      makeLevel(n);
+      mode = 'play'; layoutReady = false;
+      last = performance.now();
+      updateHud(); focusPlay();
+      announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+    };
+    if (charmsDue(n) > 0) { mode = 'charm'; openCharmPicker(n, go); } else go();
   }
     function resumeGame() { if (mode !== 'paused') return; mode = pausedFrom; ui.pause.hidden = true; last = performance.now(); }
   function reachRiver() {
@@ -906,6 +1014,7 @@ button { touch-action: manipulation; }
       if (dot < 0) mag *= 1 + 0.3 * dot * squall.env;
     }
     if (tall.length && inTallGrass(fish.x, fish.y)) mag *= TALL_SLOW; // wading through tall grass
+    if (has('scales')) mag *= SLICK_FLOP; // Slick Scales: only the flop's length, not the warnings or the drying
     troutMoved = true;
     const d = Math.hypot(dx, dy) || 1;
     fish.vx = dx / d * mag; fish.vy = dy / d * mag; fish.vz = 360; fish.z = 0.01;
@@ -960,6 +1069,7 @@ button { touch-action: manipulation; }
   // game-over card and the ending card it asks "Leave Trout Trot?" first.
   function handleBack() {
     if (!ui.leave.hidden) { ui.leave.hidden = true; return; }
+    if (mode === 'charm' || !ui.charm.hidden) return; // choose a charm first
     if (mode === 'ending') { skipEnding(); return; }
     if (mode === 'play' || mode === 'saved' || mode === 'dying') { pauseGame(); return; }
     if (mode === 'paused') { resumeGame(); return; }
@@ -988,7 +1098,7 @@ button { touch-action: manipulation; }
       return;
     }
     disarmRestart();
-    saveRound(1); resetStats();
+    saveRound(1); resetStats(); clearCharms();
     level = 1; makeLevel(1); layoutReady = true;
     restartBtn.hidden = true;
     $('startBtn').focus();
@@ -1014,7 +1124,7 @@ button { touch-action: manipulation; }
       return;
     }
     disarmEndRestart();
-    saveRound(1); resetStats();
+    saveRound(1); resetStats(); clearCharms();
     level = 1; makeLevel(1); layoutReady = true; mode = 'title';
     ui.end.hidden = true; ui.start.hidden = false; restartBtn.hidden = true;
     $('startBtn').focus();
@@ -1100,7 +1210,7 @@ button { touch-action: manipulation; }
     winter: { circle: 1.2, warn: 0.45, steer: 130, lead: 0.5, radius: 72, rest: [0.8, 1] }
   };
   const dive = () => (winter ? EAGLE_DIVE.winter : EAGLE_DIVE.autumn);
-  const diveWarn = () => dive().warn / flopScale();
+  const diveWarn = () => dive().warn / flopScale() + eyeBonus();
   const diveSteer = () => dive().steer * flopScale();
 
   // ---------- winter weather ----------
@@ -1235,7 +1345,7 @@ button { touch-action: manipulation; }
       e.y += (e.ty - e.y) * Math.min(1, dt * 14);
       if (e.t <= 0) {
         lastEagleEnd = clock; // an osprey waits a moment after any eagle strike
-        if (Math.hypot(fish.x - e.tx, fish.y - e.ty) < dive().radius && fish.z < sk.reachZ) {
+        if (Math.hypot(fish.x - e.tx, fish.y - e.ty) < dive().radius && fish.z < sk.reachZ && !luckyFin()) {
           e.x = e.tx; e.y = e.ty; e.phase = 'carry'; eagleCatcher = e; lose('eagle'); return;
         }
         eagleLeave(e);
@@ -1285,14 +1395,14 @@ button { touch-action: manipulation; }
         // If a buffered flop has the trout mid-hop, the warning starts when it lands (as for the eagles).
         const air = fish.z > 0 || fish.vz > 0;
         const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
-        o.t = o.lockDur = OSPREY.warn / flopScale() + tLand;
+        o.t = o.lockDur = OSPREY.warn / flopScale() + eyeBonus() + tLand;
         tone(1500, 0.16, 'sine', 0.05, 0.7); announce('Osprey diving!');
       }
     } else if (o.phase === 'lock') {
       o.x += (o.tx - o.x) * Math.min(1, dt * 14); o.y += (o.ty - o.y) * Math.min(1, dt * 14);
       if (o.t <= 0) {
         lastOspreyEnd = clock;
-        if (Math.hypot(fish.x - o.tx, fish.y - o.ty) < o.radius && fish.z < EAGLE.reachZ) {
+        if (Math.hypot(fish.x - o.tx, fish.y - o.ty) < o.radius && fish.z < EAGLE.reachZ && !luckyFin()) {
           o.x = o.tx; o.y = o.ty; o.phase = 'carry'; eagleCatcher = o; lose('osprey'); return;
         }
         eagleLeave(o);
@@ -1480,7 +1590,7 @@ button { touch-action: manipulation; }
       h.angle += angleDiff(want, h.angle) * Math.min(1, dt * 4);
       h.neck += (HERON.rest - h.neck) * Math.min(1, dt * 6);
       if (d < HERON.reach && prey.z < 20) {
-        h.state = 'cock'; h.t = HERON.cock;
+        h.state = 'cock'; h.t = HERON.cock + eyeBonus();
         h.tx = prey.x; h.ty = prey.y; h.angle = want;
         tone(170, 0.3, 'sawtooth', 0.06, 0.7);
         announce('Heron striking!');
@@ -1492,7 +1602,7 @@ button { touch-action: manipulation; }
         h.state = 'strike'; h.t = HERON.strike;
         tone(950, 0.08, 'square', 0.05, 0.5);
         // once cocked, the strike lands whatever the shade or grass; only the invisibility bubble calls it off
-        if (invisible <= 0 && Math.hypot(fish.x - h.tx, fish.y - h.ty) < HERON.hit && fish.z < 25) { heronCatcher = h; lose('heron'); }
+        if (invisible <= 0 && Math.hypot(fish.x - h.tx, fish.y - h.ty) < HERON.hit && fish.z < 25 && !luckyFin()) { heronCatcher = h; lose('heron'); }
       }
     } else if (h.state === 'strike') {
       h.t -= dt;
@@ -1647,6 +1757,7 @@ button { touch-action: manipulation; }
 
   function update(dt) {
     clock += dt;
+    if (finT > 0) finT -= dt;
     if (mode === 'play' || mode === 'saved' || mode === 'dying') { // time played
       stats.ms += dt * 1000;
       if ((statsSaveT += dt) > 15) { statsSaveT = 0; saveStats(); }
@@ -1721,8 +1832,12 @@ button { touch-action: manipulation; }
       if (stateTimer <= 0) {
         if (season === 'finale') startEnding();
         else {
-          level++; chainWx = true; makeLevel(level); mode = 'play'; updateHud();
-          announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+          const next = () => {
+            level++; chainWx = true; makeLevel(level); mode = 'play'; updateHud(); focusPlay();
+            announce((seasonName ? seasonName + '. ' : '') + 'Round ' + level + ', ' + placeLine() + '.');
+          };
+          if (charmsDue(level + 1) > 0) { mode = 'charm'; openCharmPicker(level + 1, next); } // 99, 199, 299, 399: a charm first
+          else next();
         }
       }
     } else if (mode === 'ending') {
@@ -2241,7 +2356,7 @@ button { touch-action: manipulation; }
     // If a buffered flop has the trout mid-hop, the warning starts when it lands (as for every eagle).
     const air = fish.z > 0 || fish.vz > 0;
     const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
-    g.phase = 'lock'; g.tx = aim.x; g.ty = aim.y; g.radius = R; g.hold = tLand; g.t = g.lockDur = P.warn + tLand;
+    g.phase = 'lock'; g.tx = aim.x; g.ty = aim.y; g.radius = R; g.hold = tLand; g.t = g.lockDur = P.warn + eyeBonus() + tLand;
     tone(1000, 0.32, 'square', 0.05, 0.8); announce('The Great Eagle dives!');
     if (P.mate) { // the mate's ring drops to one side, so the pair cuts off one way out
       const hd = Math.hypot(fish.vx, fish.vy) > 5 ? Math.atan2(fish.vy, fish.vx) : rnd(0, 6.283), side = Math.random() < 0.5 ? -1 : 1, off = R * 1.25;
@@ -2273,8 +2388,8 @@ button { touch-action: manipulation; }
     const B = boss, g = B.great, m = B.mate, reach = EAGLE.reachZ;
     const hitG = Math.hypot(fish.x - g.tx, fish.y - g.ty) < g.radius && fish.z < reach;
     const hitM = m.phase === 'lock' && Math.hypot(fish.x - m.tx, fish.y - m.ty) < m.radius && fish.z < reach;
-    if (hitG) { g.x = g.tx; g.y = g.ty; g.phase = 'carry'; eagleCatcher = g; lose('great'); return; }
-    if (hitM) { m.x = m.tx; m.y = m.ty; m.phase = 'carry'; eagleCatcher = m; lose('eagle'); return; }
+    if (hitG && !luckyFin()) { g.x = g.tx; g.y = g.ty; g.phase = 'carry'; eagleCatcher = g; lose('great'); return; }
+    if (hitM && !luckyFin()) { m.x = m.tx; m.y = m.ty; m.phase = 'carry'; eagleCatcher = m; lose('eagle'); return; }
     if (m.phase === 'lock') eagleLeave(m);
     const lure = lureAt(g.tx, g.ty);
     if (lure) bossStun(lure);
@@ -2493,6 +2608,7 @@ button { touch-action: manipulation; }
     $('endStats').innerHTML = rows.map(r => '<span>' + r[0] + '</span><b>' + r[1] + '</b>').join('');
     $('endNote').textContent = 'Counted since v' + stats.since + (stats.hadProgress ? '; rounds you cleared before then are not included' : '') + '.';
     $('endCredits').textContent = 'Trout Trot \u00b7 v' + APP_VERSION + '. For the Upper Iowa River and the trout of Decorah, Iowa. Thank you for playing.';
+    $('endCharms').hidden = !charms.length; $('endCharms').textContent = 'Charms: ' + charmNames() + '.';
     ui.end.hidden = false; endRestartBtn.textContent = 'Start over'; endRestartBtn.classList.remove('armed');
     $('fightBtn').focus();
     announce('You made it home. ' + stats.rounds + ' rounds cleared, ' + stats.flops + ' flops, lost ' + stats.lost + ' times, ' + fmtTime(stats.ms) + ' played.');
@@ -2590,7 +2706,7 @@ button { touch-action: manipulation; }
           const aim = eagleAim(0.3);
           const air = fish.z > 0 || fish.vz > 0;
           const tLand = air ? (fish.vz + Math.sqrt(fish.vz * fish.vz + 2 * GRAV * fish.z)) / GRAV : 0;
-          S.tx = aim.x; S.ty = aim.y; S.hold = tLand; S.phase = 'warn'; S.t = S.lockDur = Math.min(lerpSev(LIGHT.warnCap, sev), (1.0 - 0.1 * sev) / flopScale()) + tLand; // longer when flops are weak, up to the cap
+          S.tx = aim.x; S.ty = aim.y; S.hold = tLand; S.phase = 'warn'; S.t = S.lockDur = Math.min(lerpSev(LIGHT.warnCap, sev), (1.0 - 0.1 * sev) / flopScale()) + eyeBonus() + tLand; // longer when flops are weak, up to the cap
           tone(1500, 0.18, 'triangle', 0.04, 0.7); announce('Lightning!');
         }
       } else {
@@ -2599,7 +2715,7 @@ button { touch-action: manipulation; }
           S.phase = 'idle'; S.next = Math.max(LIGHT.gapMin, rnd(LIGHT.gap[0], LIGHT.gap[1]) - LIGHT.gapEase * sev); S.bolt = 0.3;
           lightning.glow = 1; lightning.echo = 0.14;
           burst(S.tx, S.ty, 14, '#fff3a8', 260); tone(70, 0.6, 'sawtooth', 0.08, 0.5);
-          if (Math.hypot(fish.x - S.tx, fish.y - S.ty) < strikeR() && fish.z < EAGLE.reachZ) lose('lightning');
+          if (Math.hypot(fish.x - S.tx, fish.y - S.ty) < strikeR() && fish.z < EAGLE.reachZ && !luckyFin()) lose('lightning');
         }
       }
     }
@@ -2644,12 +2760,19 @@ button { touch-action: manipulation; }
       tone(1700, 0.12, 'square', 0.05, 0.5); tone(2300, 0.1, 'square', 0.04, 0.5); announce('A raccoon!');
       return;
     }
-    if (invisible > 0) return;
+    if (invisible > 0 || clock < (r.stun || 0)) return;
     const dx = fish.x - r.x, dy = fish.y - r.y, d = Math.hypot(dx, dy) || 1;
     const step = Math.min(d, RACCOON.speed * (inTallGrass(r.x, r.y) ? 0.55 : 1) * dt);
     r.x += dx / d * step; r.y += dy / d * step; r.step += step;
     r.x = Math.max(edgeAt(r.y) + 14, Math.min(TREES - 10, r.x)); // not into the river, not out of the bank
-    if (Math.hypot(fish.x - r.x, fish.y - r.y) < RACCOON.catchR && fish.z < 12) lose('raccoon');
+    if (Math.hypot(fish.x - r.x, fish.y - r.y) < RACCOON.catchR && fish.z < 12) {
+      if (luckyFin()) { // it backs off, startled, but stays on the bank
+        r.stun = clock + 1.5;
+        r.x = Math.max(edgeAt(r.y) + 14, Math.min(TREES - 10, r.x - dx / d * 70));
+        r.y = Math.max(TOP - 30, Math.min(BOTTOM + 30, r.y - dy / d * 70));
+      }
+      else lose('raccoon');
+    }
   }
   function drawRaccoon() {
     const r = raccoon;
@@ -3186,6 +3309,10 @@ button { touch-action: manipulation; }
   }
 
   function drawFish() {
+    if (finT > 0 && mode === 'play') { // Lucky Fin: a golden flash round the trout
+      ctx.save(); ctx.globalAlpha = Math.min(1, finT) * (reduced ? 0.6 : 0.5 + 0.4 * Math.sin(clock * 30));
+      ctx.strokeStyle = '#ffe27a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(fish.x, fish.y - fish.z * 0.5, 28 + (1.4 - finT) * 18, 0, 7); ctx.stroke(); ctx.restore();
+    }
     const dry = 1 - Math.max(0, moisture) / 100;
     const dead = mode === 'dying' || mode === 'over';
     const z = fish.z + fish.lift * 120;
@@ -3371,7 +3498,7 @@ button { touch-action: manipulation; }
     if (!ptr || !canFlop()) return;
     const dx = (ptr.x - ptr.x0) * (flip ? -1 : 1), dy = ptr.y - ptr.y0, dist = Math.hypot(dx, dy);
     if (dist < 14) return;
-    const mag = swipeMag(dist) * flopScale(), air = 2 * 360 / GRAV, reach = mag * air;
+    const mag = swipeMag(dist) * flopScale() * (has('scales') ? SLICK_FLOP : 1), air = 2 * 360 / GRAV, reach = mag * air;
     const ux = dx / dist, uy = dy / dist;
     ctx.fillStyle = 'rgba(250,249,243,0.85)';
     for (let i = 1; i <= 10; i++) {
@@ -3497,6 +3624,11 @@ button { touch-action: manipulation; }
       screenText(pl, W / 2, view.oy + 240 * view.s + 34 * fs, 22 * fs * Math.min(1, 32 / pl.length));
       ctx.globalAlpha = 1;
     }
+    if (finT > 0 && mode === 'play') {
+      ctx.globalAlpha = Math.min(1, finT);
+      screenText('Lucky Fin!', W / 2, view.oy + 190 * view.s, 36 * fs, '#ffe27a');
+      ctx.globalAlpha = 1;
+    }
     if (mode === 'play' && hintOn && level === 1) {
       const p = toScreen((shoreAt(fish.y) + fish.x) / 2, fish.y - 70);
       screenText('← Swipe toward the river', p.x, p.y, 22 * fs);
@@ -3523,7 +3655,10 @@ button { touch-action: manipulation; }
     restartBtn.hidden = savedRound <= 1;
     addEventListener('resize', resize);
     requestAnimationFrame(frame);
+    updateCharmIcons();
     try { $('startBtn').focus({ preventScroll: true }); } catch (e) {}
+    // A saved round past 99 with no charms (an older save, or lost data): pick the normal number now.
+    if (charmsDue(savedRound) > 0) openCharmPicker(savedRound, () => { try { $('startBtn').focus({ preventScroll: true }); } catch (e) {} });
   }
   boot();
 })();

@@ -1,6 +1,6 @@
 {
   "name": "trout-trot",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Trout Trot: a rainbow trout flopping back into the Upper Iowa River",
   "main": "index.js",
   "scripts": {

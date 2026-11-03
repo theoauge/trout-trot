@@ -15,7 +15,7 @@ A top-down mobile arcade game: a rainbow trout stranded on a bank of the Upper I
 | Path | What it is |
 |---|---|
 | `flop-home.html` | **The game.** All HTML, CSS and JS in one file. Edit this. |
-| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.005 build 5) |
+| `trout-trot-app/` | Capacitor app (app ID `com.thomas.trouttrot`, v1.1.006 build 6) |
 | `trout-trot-app/www/index.html` | Generated from `flop-home.html` by `npm run build`. Never edit by hand. |
 | `trout-trot-app/scripts/` | `build-www.mjs`, `make-icons.mjs`, `fetch-fonts.mjs`, `set-version.mjs` |
 | `trout-trot-app/README.md` | App commands and the Android release steps |
@@ -48,6 +48,12 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
   - Pause menu: Go to round, 1–400.
 - **Back (Android):** the native app handles the back button and edge-swipe back gesture through Capacitor's App plugin (absent in the plain web build, which skips it): in a round it pauses, when paused it resumes, during the ending it skips the scene, and on the start screen, the game-over card and the ending card it asks "Leave Trout Trot?" (Stay / Leave). `MainActivity.java` also asks Android (API 29+) to leave a 200 dp strip on each side edge to the app, so edge swipes in play reach the game instead of being the back gesture.
 - **Ground and grass (v1.1.005):** one warm brown (`GROUND_BROWN` #94764d) under every season and the finale, wetter in spring (`GROUND_WET` #7d6240); snow, grass and flowers sit on top. Every season has double the grass tufts: the original tufts are generated as before, and the extra ones come from the grass's own seeded random stream (`grassRng`), so the rest of a round's layout, weather and birds are unchanged.
+- **Charms (v1.1.006):** four bonuses that stack, kept in localStorage `trout-trot-charms` (a JSON list of ids; missing or corrupt data counts as none, unknown ids are dropped) next to the saved round.
+  - **Keen Eye** (`eyeBonus`, +0.2 s on every warning, added after any cap): `diveWarn` (eagles, pairs, trio rings), the osprey warning, the Great Eagle's `P.warn`, the lightning warning (after `LIGHT`'s cap) and the heron's cock time.
+  - **Thick Skin** (`SKIN_DRAIN` 0.9): the last factor in `drainRate`.
+  - **Slick Scales** (`SLICK_FLOP` 1.1): in `launch` and the swipe preview only, not in `flopScale`, so warnings and drying are unchanged.
+  - **Lucky Fin** (`luckyFin`, 15%, `FIN_GRACE` 0.5 s): checked at each catch: eagle and osprey strike, heron strike, lightning, both Great Eagle hits, and the raccoon (it backs off for 1.5 s). The attacker misses as on a normal miss, the trout flashes gold, "Lucky Fin!" shows and is announced. During the grace window any strike is ignored. Never applies to drying out.
+  - **Earning:** the picker (`openCharmPicker`, `charmCount`, `charmsDue`) shows after clearing rounds 99, 199, 299 and 399 (one of the charms not yet owned; at 399 a single "You earned" card). **Go to round N** clears the charms and asks for the normal number for N (1–99: 0, 100–199: 1, 200–299: 2, 300–399: 3, 400: all four, granted without asking); **Start over** clears them; a saved round past 99 with no charm data gets the same prompt on load; retrying a round changes nothing. Owned charms show as small icons under the moisture bar, in the pause card and on the ending card.
 - **Round start:** moisture and eagles wait for the trout's first flop (`troutMoved`).
 - **Autumn (rounds 1–99)**
   - "Autumn" banner at round 1.
@@ -114,6 +120,6 @@ sed -n '/^<script>$/,/^<\/script>$/p' flop-home.html | sed '1d;$d' > /tmp/g.js &
 
 ## State
 
-- **Last commit:** `v1.1.005` (build 5): rainy spring with storm streaks and tougher lightning, whole-field mud, spring drain 0.8, no spring ponds or puddles, the 4104 bank cap, brown ground, double grass, summer tree shelter from birds. Before it: the winter trio (rounds 150–199) and `v1.1.004` (the Great Eagle finale, ending and stats, storm rounds, Android back gesture, shorter swipe buffer). Nothing is uncommitted. Not yet reviewed on a device or released.
+- **Last commit:** `v1.1.006` (build 6): the four charms (Keen Eye, Thick Skin, Slick Scales, Lucky Fin) with the picker, saved charms, effects, icons and the privacy policy row, on top of `v1.1.005`. Nothing is uncommitted. Not yet reviewed on a device or released.
 - **Not yet verified on a device:** frame rate in winter, how the haze reads, pincer geometry near walls, the eagle difficulty feel, and ice sliding, summer frame rate (draw work is about 30–60% above late spring: tall grass blades, canopies and floaters are the likely costs) and whether summer routes feel fair now that a trout needs a spring stop on the way. iOS "1.1.003" is likely read as 1.1.3 by App Store Connect; confirm on the first TestFlight upload.
 - **Not pushed anywhere:** no GitHub remote yet. iPhone builds go through Codemagic; see `SETUP-IPHONE.md`.

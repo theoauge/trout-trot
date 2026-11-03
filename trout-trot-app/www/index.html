@@ -443,49 +443,77 @@ button { touch-action: manipulation; }
   let flip = false, river = { base: 185, amp: 0, phase: 0, far: 60 };
   let boulders = [], logs = [], springs = [], leaves = [], pebbles = [], trees = [], parts = [];
   let anglers = [], talus = [], cedars = [], ripples = [], drifts = [], holes = [], cracks = [], flakes = [], place = '';
-  let grass = {}; // grass blades, grouped by color so each color draws as one path
-  // Grass drawing (v1.1.007). Blades are prepared once when a round is built (angle, offsets, wave phases);
-  // each frame only the sway changes, read from a sine table. Two straight segments per blade, butt caps.
+  // Grass (v1.1.007): tuft stamps. A round has GRASS_V tuft variants (3-6 blades each, in the season's colours),
+  // drawn once at the real pixel scale into an atlas, GRASS_F lean frames per variant. Each tuft on the bank is
+  // {x, y, v, p1, p2}: a variant and its wave phases. Per frame a tuft's sway (the wave from the sine table plus
+  // wind and storm lean) picks a lean frame and is copied from the atlas: one drawImage per tuft.
+  let grass = { tufts: [], variants: [], atlas: null };
   const SINT = Array.from({ length: 256 }, (_, i) => Math.sin(i * Math.PI / 128)), SIN_K = 128 / Math.PI; // 256 steps round the circle
-  const GRASS_WAVE = { kx: 0.012, ky: 0.004, k2: 0.03, a1: 0.45, a2: 0.15, r1: 1.8, r2: 0.7, kd: 12 };
-  const TALL_WAVE = { kx: 0.02, ky: 0.006, k2: 0.05, a1: 0.55, a2: 0.18, r1: 1.6, r2: 0.8, kd: 20 };
-  // Safety net: if the smoothed frame interval stays slow for a while, the extra (v1.1.005) tufts are skipped
-  // until frames are healthy again. Looks only; never touches gameplay. 17.5 ms is a full 60 fps frame.
-  const GRASS_SLOW_MS = 20, GRASS_SLOW_HOLD = 1, GRASS_FAST_MS = 17.5, GRASS_FAST_HOLD = 2, FRAME_EASE = 0.1;
+  // The breeze: one slow, smooth value that bends every tuft the same way (SWAY_DIR) by up to SWAY_AMP, then eases
+  // it back upright, never the other way. The time offset by x makes it roll across the bank; each tuft's amount
+  // varies a little (x0.85-1.15). In a storm it points the way the gust does.
+  const SWAY_AMP = 0.22, SWAY_SPEED = 1, SWAY_ROLL = 0.006, SWAY_DIR = 1;
+  const GRASS_EXTRA = 5; // extra tufts from grassRng, as a multiple of the original count (so 6x the v1.1.004 grass in all)
+  const GRASS_V = 24, GRASS_F = 29, GRASS_R = 1.0, GRASS_COLS = 24, GRASS_MAXTURN = 1.5; // variants, lean frames across -R..R (fine steps, as the breeze only uses a small part), atlas columns, widest a blade may turn from straight up
   // Reduced motion: still grass is drawn once into chunks about one screen wide and blitted.
   const GRASS_CHUNK = 512, GRASS_Y0 = -110, GRASS_H = 1040;
-  let frameMs = 16.7, grassThin = false, grassTimer = 0, grassCache = null, dprNow = 1;
-  window.__grass = () => ({ thin: grassThin, frameMs, chunks: grassCache ? grassCache.chunks.size : 0 }); // for the bot tester
-  function finishBlades(set, w) {
-    for (const c in set) {
-      const list = set[c];
-      list.sort((p, q) => p.x - q.x);
-      for (const g of list) {
-        const base = -Math.PI / 2 + g.a, q = g.len * 0.25;
-        g.ba = base; g.ca = Math.cos(base); g.sa = Math.sin(base);
-        g.q = q; g.qa = q * g.ca; g.qs = q * g.sa; g.h = g.len * 0.5; g.k = g.len / w.kd;
-        g.p1 = (g.x * w.kx + g.y * w.ky) * SIN_K + 512; g.p2 = g.x * w.k2 * SIN_K + 512;
-      }
-    }
+  let grassCache = null, grassDrawn = 0, dprNow = 1;
+  window.__grass = () => ({ tufts: grass.tufts.length, drawn: grassDrawn, atlasMB: grass.atlas ? grass.atlas.cv.width * grass.atlas.cv.height * 4 / 1048576 : 0, chunks: grassCache ? grassCache.chunks.size : 0 }); // for the bot tester
+  // The variants: blades as {c, dx, dy, a, len} around the tuft's base, from the grass's own random stream.
+  function makeVariants(G, strawChance, colorFor, lenScale) {
+    return Array.from({ length: GRASS_V }, () => {
+      const straw = strawChance(G), blades = [];
+      for (let b = 3 + Math.floor(G.next() * 4); b > 0; b--) blades.push({ c: colorFor(G, straw), dx: G.rnd(-3, 3), dy: G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * lenScale });
+    return blades;
+    });
   }
-  // Adds the blades between x0 and x1 to the current path: base, the middle of the bent blade, tip.
-  function bladePath(c2, blades, x0, x1, t, still, lx, ly, skipExtra, w) {
-    const o1 = (t * w.r1 * SIN_K) % 256, o2 = (t * w.r2 * SIN_K) % 256;
-    let lo = 0, hi = blades.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (blades[mid].x > x0) hi = mid; else lo = mid + 1; }
-    for (let i = lo; i < blades.length; i++) {
-      const g = blades[i];
-      if (g.x >= x1) break;
-      if (skipExtra && g.extra) continue;
-      let ct = g.ca, st = g.sa;
-      if (!still) {
-        const tip = g.ba + (SINT[((g.p1 - o1) | 0) & 255] * w.a1 + SINT[((g.p2 + o2) | 0) & 255] * w.a2) * g.k;
-        ct = Math.cos(tip); st = Math.sin(tip);
+  function addTuft(list, x, y, v) { list.push({ x, y, v, p1: x * SWAY_ROLL * SIN_K + 512, p2: (x * SWAY_ROLL * 1.9 + y * 0.002) * SIN_K + 512, amt: 0.85 + 0.3 * (Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) }); }
+  // One tuft per cell: column v % GRASS_COLS, row (v / GRASS_COLS) * GRASS_F + frame; the base sits at (bx, by) in the cell.
+  function buildAtlas(sc) {
+    let maxLen = 0;
+    for (const v of grass.variants) for (const b of v) maxLen = Math.max(maxLen, b.len);
+    const cw = Math.ceil((maxLen + 6) * 2 * sc), up = Math.ceil((maxLen + 4) * sc), ch = up + Math.ceil(4 * sc);
+    const rows = GRASS_F * Math.ceil(GRASS_V / GRASS_COLS);
+    const cv = document.createElement('canvas');
+    cv.width = cw * GRASS_COLS; cv.height = ch * rows;
+    const g = cv.getContext('2d');
+    g.lineWidth = 2; g.lineCap = 'butt';
+    for (let v = 0; v < grass.variants.length; v++) {
+      for (let j = 0; j < GRASS_F; j++) {
+        const s = -GRASS_R + j * (2 * GRASS_R / (GRASS_F - 1)), ox = (v % GRASS_COLS) * cw, oy = (Math.floor(v / GRASS_COLS) * GRASS_F + j) * ch;
+        g.save();
+        g.beginPath(); g.rect(ox, oy, cw, ch); g.clip();
+        g.setTransform(sc, 0, 0, sc, ox + cw / 2, oy + up);
+        for (const b of grass.variants[v]) {
+          const turn = Math.max(-GRASS_MAXTURN, Math.min(GRASS_MAXTURN, b.a + s * (b.len / 12))), ang = -Math.PI / 2 + turn, q = b.len * 0.25;
+          const ca = Math.cos(ang), sa = Math.sin(ang);
+          g.strokeStyle = b.c; g.beginPath();
+          g.moveTo(b.dx, b.dy); g.lineTo(b.dx + q * (Math.cos(-Math.PI / 2 + b.a) + ca), b.dy + q * (Math.sin(-Math.PI / 2 + b.a) + sa)); g.lineTo(b.dx + ca * b.len, b.dy + sa * b.len);
+          g.stroke();
+        }
+        g.restore();
       }
-      c2.moveTo(g.x, g.y);
-      c2.lineTo(g.x + g.qa + g.q * ct + lx * g.h, g.y + g.qs + g.q * st + ly * g.h);
-      c2.lineTo(g.x + ct * g.len + lx * g.len, g.y + st * g.len + ly * g.len);
     }
+    return { cv, sc, cw, ch, bx: cw / 2, by: up };
+  }
+  // Copies the tufts between x0 and x1. `still`: no wave. lx/ly: wind and storm lean (sideways: extra lean frames;
+  // along the blade: the stamp is stretched or squashed from its base).
+  function drawStamps(c2, x0, x1, t, still, lx, ly, dir) {
+    const A = grass.atlas, tufts = grass.tufts, sc = A.sc, amp = SWAY_AMP * dir;
+    const o1 = (t * 0.9 * SWAY_SPEED * SIN_K) % 256, o2 = (t * 0.37 * SWAY_SPEED * SIN_K) % 256, inv = (GRASS_F - 1) / (2 * GRASS_R);
+    const cw = A.cw / sc, ch = A.ch / sc, bx = A.bx / sc, by = A.by / sc, f = ly ? Math.max(0.4, Math.min(1.6, 1 - ly)) : 1;
+    let lo = 0, hi = tufts.length, n = 0;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tufts[mid].x > x0) hi = mid; else lo = mid + 1; }
+    for (let i = lo; i < tufts.length; i++) {
+      const g = tufts[i];
+      if (g.x >= x1) break;
+      let s = lx;
+      if (!still) s += amp * g.amt * (0.5 + 0.3 * SINT[((g.p1 - o1) | 0) & 255] + 0.2 * SINT[((g.p2 - o2) | 0) & 255]); // breeze 0..1
+      const j = s <= -GRASS_R ? 0 : s >= GRASS_R ? GRASS_F - 1 : Math.round((s + GRASS_R) * inv);
+      c2.drawImage(A.cv, (g.v % GRASS_COLS) * A.cw, (Math.floor(g.v / GRASS_COLS) * GRASS_F + j) * A.ch, A.cw, A.ch, g.x - bx, g.y - by * f, cw, ch * f);
+      n++;
+    }
+    return n;
   }
   let snowGrain = null; // repeating speckle texture for winter snow, made once per round
   let flowers = []; // spring wildflowers: { kind, x, y, a }
@@ -513,15 +541,13 @@ button { touch-action: manipulation; }
   //  wind        on windy rounds gusts push a trout that is in the air sideways (along the river, one way
   //              for the whole round); the grass leans and leaves blow the same way.
   let shadeTrees = [], shadePool = [], windDir = 1;
-  // More summer: tall grass, gravel bars, drifting canoes and tubers, dusk and the raccoon.
-  //  tall      patches of tall prairie grass: a trout in one is hidden from the birds (one that has not yet
-  //            dropped its ring loses track; a ring already down still strikes) but flops out of it are x0.8.
+  // More summer: gravel bars, drifting canoes and tubers, dusk and the raccoon.
   //  bars      gravel bars: pale shoals that push the water's edge out into the river in places. edgeAt()
   //            is where the water really starts, and inRiver and the drawing both use it.
   //  floaters  canoes and tubers drifting down the river; landing in one bumps the trout back onto the bank.
   //  dusk      about one summer round in five (more later) is dusk: dark, warm light, fireflies, a shorter
   //            sight, one eagle and no osprey; and a raccoon that stalks the trout along the bank.
-  let tall = [], tallBlades = {}, bars = [], floaters = [], dusk = false, raccoon = null, flies = [];
+  let bars = [], floaters = [], dusk = false, raccoon = null, flies = [];
   // The finale (round 400, "The Eagle's Nest") is a boss fight; boss is null in every other round.
   //  bossLook  the arena's look in the current phase: '' (not the finale), 'autumn', 'snow' or 'storm'. The
   //            checks that were winter-only (snow, bare trees, ice) also answer to bossLook 'snow', and
@@ -556,8 +582,6 @@ button { touch-action: manipulation; }
   const coldNow = () => winter || bossLook === 'snow';
   const windy = () => weather === 'wind' || bossLook === 'storm';
   const finaleCalm = () => (boss ? 0.3 : 1); // drying is gentle in the arena: moisture is not the challenge
-  const TALL_SLOW = 0.8;
-  const inTallGrass = (x, y) => tall.some(p => ((x - p.x) / p.rx) ** 2 + ((y - p.y) / p.ry) ** 2 < 1);
   const barAt = y => { let b = 0; for (const s of bars) { const t = (y - s.y) / (s.len / 2); if (t > -1 && t < 1) b = Math.max(b, s.h * (1 - t * t)); } return b; };
   const edgeAt = y => shoreAt(y) - (bars.length ? barAt(y) : 0); // where the water starts, past any gravel bar
   const duskChance = n => 0.2 + 0.15 * clamp01((n - SUMMER_FROM) / 99);
@@ -700,7 +724,7 @@ button { touch-action: manipulation; }
     });
     // Grass: tufts of 3–6 thin blades across the bank. In autumn more of them turn straw-yellow as
     // the season goes on; in winter they're dead tan, shrinking and thinning until the snow buries them.
-    grass = {};
+    grass = { tufts: [], variants: [], atlas: null };
     const GREEN = ['#4a7530', '#3f6a2a', '#5a8a38', '#9cbd5c'], STRAW = ['#c2a654', '#d4b862', '#a88c3e'];
     const DEAD = ['#7a6a44', '#8a7a50', '#6a5a3a'], DEEP = ['#3c6a2a', '#32602a', '#477a30', '#6a9a3e'];
     // In spring the grass comes back: short and sparse, with old dead blades among the new, at 200.
@@ -708,31 +732,27 @@ button { touch-action: manipulation; }
     const tuftCount = Math.round(WW / 600 * 520 * (winter ? clamp01(1 - cover * 0.9) : spr ? 0.45 + 0.55 * spring.green : 1));
     const deadShare = spr ? 0.7 * clamp01(1 - spring.green * 1.6) : 0;
     if (bladeScale > 0.12) {
+      const G = grassRng(n); // the variants, every tuft's variant and the extra tufts come from this stream
+      grass.variants = makeVariants(G, g => !winter && g.next() < fall * 0.7,
+        (g, straw) => g.pick(spr ? (g.next() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN), bladeScale);
+      // The original tufts still draw their random numbers from Math.random exactly as before (so the rest of the
+      // round is unchanged); only their positions are used.
       for (let i = 0; i < tuftCount; i++) {
         const y = rnd(-60, WH + 60), x = rnd(shoreAt(y) + 12, WW + 300);
         const straw = !winter && Math.random() < fall * 0.7;
         const blades = 3 + Math.floor(Math.random() * 4);
         for (let b = 0; b < blades; b++) {
-          const c = pickOne(spr ? (Math.random() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
-          (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * bladeScale });
+          pickOne(spr ? (Math.random() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
+          rnd(-3, 3); rnd(-2, 2); rnd(-0.55, 0.55); rnd(9, 17);
         }
+        addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
-    }
-    // A second helping of tufts (double the grass) from the grass's own random stream.
-    if (bladeScale > 0.12) {
-      const G = grassRng(n);
-      for (let i = 0; i < tuftCount; i++) {
+      for (let i = 0; i < tuftCount * GRASS_EXTRA; i++) {
         const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300);
-        const straw = !winter && G.next() < fall * 0.7;
-        const blades = 3 + Math.floor(G.next() * 4);
-        for (let b = 0; b < blades; b++) {
-          const c = G.pick(spr ? (G.next() < deadShare ? DEAD : GREEN) : winter ? DEAD : straw ? STRAW : sum ? DEEP : GREEN);
-          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * bladeScale, extra: true });
-        }
+        addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
+      grass.tufts.sort((p, q) => p.x - q.x); // by x, so drawGrass can find the tufts on screen without visiting all of them
     }
-    // Sorted by x so drawGrass can find the blades on screen without visiting all of them.
-    finishBlades(grass, GRASS_WAVE);
     // Winter drifts: scattered at 10% coverage, larger and more numerous until they merge.
     // In early spring the last of the snow is a few small, shrinking patches.
     drifts = winter ? Array.from({ length: Math.round(WW / 600 * (14 + 30 * cover)) }, () => {
@@ -793,23 +813,22 @@ button { touch-action: manipulation; }
       }
       windDir = Math.random() < 0.5 ? -1 : 1;
     }
-    // Tall grass, gravel bars and floaters (summer).
-    tall = []; tallBlades = {}; bars = []; floaters = [];
+    // Gravel bars and floaters (summer).
+    bars = []; floaters = [];
     if (sum) {
+      // The tall grass patches were removed in v1.1.007, but their placement still draws the same random numbers
+      // in the same order (patches, then each patch's blades), so everything built after this is unchanged.
+      const patches = [];
       for (let i = Math.round(WW / 600 * 2.4); i > 0; i--) {
         for (let tries = 0; tries < 12; tries++) {
           const rx = rnd(70, 120), ry = rnd(45, 75), y = rnd(TOP + 30, BOTTOM - 30), x = rnd(shoreAt(y) + rx + 70, TREES - rx - 20);
-          if (Math.hypot(x - fish.x, y - fish.y) > Math.max(rx, ry) + 90) { tall.push({ x, y, rx, ry }); break; }
+          if (Math.hypot(x - fish.x, y - fish.y) > Math.max(rx, ry) + 90) { patches.push({ rx, ry }); break; }
         }
       }
-      const TALLC = ['#4f7f2c', '#5c8c34', '#6e9b3e', '#3f6a28', '#b9a45a'];
-      for (const p of tall) {
-        for (let k = Math.round(Math.PI * p.rx * p.ry / 60); k > 0; k--) {
-          const a = rnd(0, 6.283), d = Math.sqrt(Math.random()), c = pickOne(TALLC);
-          (tallBlades[c] = tallBlades[c] || []).push({ x: p.x + Math.cos(a) * p.rx * d, y: p.y + Math.sin(a) * p.ry * d, a: rnd(-0.4, 0.4), len: rnd(24, 40) });
-        }
+      const TALLC = ['', '', '', '', '']; // pickOne still needs a list of the old length
+      for (const p of patches) {
+        for (let k = Math.round(Math.PI * p.rx * p.ry / 60); k > 0; k--) { rnd(0, 6.283); Math.random(); pickOne(TALLC); rnd(-0.4, 0.4); rnd(24, 40); }
       }
-      finishBlades(tallBlades, TALL_WAVE);
       // Gravel bars: 6–8 shoals, each 120–220 units long and pushing the water's edge out 28–50 units.
       for (let i = 6 + Math.floor(Math.random() * 3); i > 0; i--) bars.push({ y: rnd(TOP + 40, BOTTOM - 40), len: rnd(120, 220), h: rnd(28, 50), seed: rnd(0, 6) });
       // Three canoes and four tubers, spread along the river, all drifting downstream.
@@ -1067,7 +1086,6 @@ button { touch-action: manipulation; }
       const dot = (dx * squall.wx + dy * squall.wy) / (Math.hypot(dx, dy) || 1);
       if (dot < 0) mag *= 1 + 0.3 * dot * squall.env;
     }
-    if (tall.length && inTallGrass(fish.x, fish.y)) mag *= TALL_SLOW; // wading through tall grass
     if (has('scales')) mag *= SLICK_FLOP; // Slick Scales: only the flop's length, not the warnings or the drying
     troutMoved = true;
     const d = Math.hypot(dx, dy) || 1;
@@ -1308,9 +1326,9 @@ button { touch-action: manipulation; }
 
   // The one place predators check whether they can see the trout. The eagle and the heron
   // only ever aim at what this returns, so invisibility hides the trout from both.
-  // Tall grass and a shade tree's canopy (while the trout is on the ground under it) hide the trout from the birds, and from herons that have not yet cocked, like a weaker
+  // A shade tree's canopy (while the trout is on the ground under it) hides the trout from the birds, and from herons that have not yet cocked, like a weaker
   // invisibility bubble (see updateEagle): a bird that has not dropped its ring loses track; a ring already down still strikes.
-  const visibleTrout = () => (invisible > 0 || (tall.length && inTallGrass(fish.x, fish.y)) || (shadeTrees.length && fish.z < 20 && shadeAt(fish.x, fish.y)) ? null : fish);
+  const visibleTrout = () => (invisible > 0 || (shadeTrees.length && fish.z < 20 && shadeAt(fish.x, fish.y)) ? null : fish);
 
   // Before diving, the eagle circles the trout (for dive().circle seconds), spiralling in from 150 to 55 units.
   const EAGLE_CIRCLE = { from: 150, to: 55, spin: 3.2 };
@@ -1947,10 +1965,6 @@ button { touch-action: manipulation; }
     drawGrass(sec);
     drawFlowers();
     drawShade();
-    for (const p of tall) { // the ground under tall grass is darker and damper
-      if (!onScreen(p.x, p.rx + 6)) continue;
-      ctx.fillStyle = 'rgba(28,66,22,0.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, p.rx, p.ry, 0, 0, 7); ctx.fill();
-    }
     for (const l of leaves) {
       if (!onScreen(l.x, 20)) continue; // only the leaves on screen
       ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
@@ -2087,29 +2101,25 @@ button { touch-action: manipulation; }
     }
   }
 
-  // Grass blades leaning toward the top of the screen, tips swaying in the wind. Gusts roll across
-  // the bank as a wave, so neighboring tufts bend together. Still under reduced motion.
+  // Grass tufts leaning toward the top of the screen, tips swaying in the wind. Gusts roll across the bank as a
+  // wave, so neighboring tufts bend together. Still under reduced motion.
   function drawGrass(sec) {
+    if (!grass.tufts.length) return;
+    const sc = dprNow * view.s;
+    if (!(sc > 0)) return;
+    if (!grass.atlas || grass.atlas.sc !== sc) grass.atlas = buildAtlas(sc);
     const t = reduced ? 0 : sec;
     const windLean = windy() ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
     const leanX = squall ? squall.vx * 1.5 : 0, leanY = (squall ? squall.vy * 1.5 : 0) + windLean; // in a storm they flatten along the gust
-    if (reduced && !leanX && !leanY && drawGrassStill()) return; // nothing moves: blit the cached chunks
-    ctx.lineWidth = 2; ctx.lineCap = 'butt';
-    for (const c in grass) {
-      ctx.strokeStyle = c;
-      ctx.beginPath();
-      bladePath(ctx, grass[c], cam - 20, cam + view.w + 20, t, reduced, leanX, leanY, grassThin, GRASS_WAVE);
-      ctx.stroke();
-    }
-    ctx.lineCap = 'round'; // what the draws after it have always started from
+    if (reduced && !leanX && !leanY) { drawGrassStill(sc); return; } // nothing moves: blit the cached chunks
+    const dir = squall && Math.abs(squall.vx) > 0.05 ? Math.sign(squall.vx) : SWAY_DIR; // with the gust, never against it
+    grassDrawn = drawStamps(ctx, cam - 20, cam + view.w + 20, t, reduced, leanX, leanY, dir);
   }
 
   // With reduced motion and no wind or storm the grass holds still, so each chunk of the bank is drawn once
-  // at the screen's pixel scale and then copied. Rebuilt when the round, the finale phase (both make a new
-  // `grass`), the window or the pixel ratio changes; chunks off screen are dropped to keep memory small.
-  function drawGrassStill() {
-    const sc = dprNow * view.s;
-    if (!(sc > 0)) return false;
+  // (from the stamps, no lean) at the screen's pixel scale and then copied. Rebuilt when the round or the finale
+  // phase (both make a new `grass`), the window or the pixel ratio changes; chunks off screen are dropped.
+  function drawGrassStill(sc) {
     if (!grassCache || grassCache.ref !== grass || grassCache.sc !== sc) grassCache = { ref: grass, sc, chunks: new Map() };
     const chunks = grassCache.chunks, k0 = Math.floor((cam - 20) / GRASS_CHUNK), k1 = Math.floor((cam + view.w + 20) / GRASS_CHUNK);
     for (const k of [...chunks.keys()]) if (k < k0 || k > k1) chunks.delete(k);
@@ -2120,17 +2130,12 @@ button { touch-action: manipulation; }
         c.width = Math.ceil(GRASS_CHUNK * sc); c.height = Math.ceil(GRASS_H * sc);
         const g = c.getContext('2d');
         g.setTransform(sc, 0, 0, sc, -k * GRASS_CHUNK * sc, -GRASS_Y0 * sc);
-        g.lineWidth = 2; g.lineCap = 'butt';
-        for (const col in grass) {
-          g.strokeStyle = col; g.beginPath();
-          bladePath(g, grass[col], k * GRASS_CHUNK - 30, (k + 1) * GRASS_CHUNK + 30, 0, true, 0, 0, false, GRASS_WAVE);
-          g.stroke();
-        }
+        drawStamps(g, k * GRASS_CHUNK - 30, (k + 1) * GRASS_CHUNK + 30, 0, true, 0, 0, SWAY_DIR);
         chunks.set(k, c);
       }
       ctx.drawImage(c, k * GRASS_CHUNK, GRASS_Y0, c.width / sc, c.height / sc);
     }
-    return true;
+    grassDrawn = 0;
   }
 
   function drawRiver(sec) {
@@ -2220,20 +2225,6 @@ button { touch-action: manipulation; }
     if (season === 'summer') drawDragonflies(sec);
   }
 
-  // Tall prairie grass: long, dense, swaying blades, drawn over the trout (a little see-through) so a trout
-  // in the grass shows through it. Found by binary search on x, like the short grass.
-  function drawTall(sec) {
-    if (!tall.length) return;
-    const t = reduced ? 0 : sec;
-    ctx.globalAlpha = 0.68; ctx.lineWidth = 2.6; ctx.lineCap = 'butt';
-    for (const c in tallBlades) {
-      ctx.strokeStyle = c; ctx.beginPath();
-      bladePath(ctx, tallBlades[c], cam - 30, cam + view.w + 30, t, reduced, 0, 0, false, TALL_WAVE);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1; ctx.lineCap = 'round';
-  }
-
   // Gravel bars: a pale shoal against the bank, reaching out into the river exactly as far as barAt() says
   // (that is where the water starts, see edgeAt), with a light ripple line and a scatter of stones.
   function drawBars() {
@@ -2313,7 +2304,7 @@ button { touch-action: manipulation; }
   }
   function setupFinale() {
     boulders = []; logs = []; springs = []; herons = []; heronCatcher = null; anglers = []; floaters = []; floes = [];
-    tall = []; tallBlades = {}; bars = []; shadeTrees = []; shadePool = []; raccoon = null; powerup.active = false; invisible = 0;
+    bars = []; shadeTrees = []; shadePool = []; raccoon = null; powerup.active = false; invisible = 0;
     teams = []; eagleCatcher = null;
     // A 5 x 3 grid of lures, one per cell with a little jitter, so one is never far from any spot on the bank.
     const x0 = river.base + 150, x1 = TREES - 30, cw = (x1 - x0) / 5, ch = (BOTTOM - TOP - 40) / 3;
@@ -2359,26 +2350,26 @@ button { touch-action: manipulation; }
     });
     const GREENS = ['#4a7530', '#3f6a2a', '#5a8a38', '#9cbd5c'], STRAWS = ['#c2a654', '#d4b862', '#a88c3e'];
     const DEADS = ['#7a6a44', '#8a7a50', '#6a5a3a'], DEEPS = ['#3c6a2a', '#32602a', '#477a30', '#6a9a3e'];
-    grass = {};
+    grass = { tufts: [], variants: [], atlas: null };
     const tufts = Math.round(WW / 600 * 520 * (snowy ? 0.12 : 1));
-    for (let i = 0; i < tufts; i++) {
-      const y = rnd(-60, WH + 60), x = rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && Math.random() < 0.55;
-      for (let b = 3 + Math.floor(Math.random() * 4); b > 0; b--) {
-        const c = pickOne(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
-        (grass[c] = grass[c] || []).push({ x: x + rnd(-3, 3), y: y + rnd(-2, 2), a: rnd(-0.55, 0.55), len: rnd(9, 17) * (snowy ? 0.45 : 1) });
-      }
-    }
-    { // double the grass, from the grass's own random stream
+    {
       const G = grassRng(FINALE_FROM);
-      for (let i = 0; i < tufts; i++) {
-        const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && G.next() < 0.55;
-        for (let b = 3 + Math.floor(G.next() * 4); b > 0; b--) {
-          const c = G.pick(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
-          (grass[c] = grass[c] || []).push({ x: x + G.rnd(-3, 3), y: y + G.rnd(-2, 2), a: G.rnd(-0.55, 0.55), len: G.rnd(9, 17) * (snowy ? 0.45 : 1), extra: true });
+      grass.variants = makeVariants(G, g => look === 'autumn' && g.next() < 0.55,
+        (g, straw) => g.pick(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS), snowy ? 0.45 : 1);
+      for (let i = 0; i < tufts; i++) { // Math.random is consumed exactly as before
+        const y = rnd(-60, WH + 60), x = rnd(shoreAt(y) + 12, WW + 300), straw = look === 'autumn' && Math.random() < 0.55;
+        for (let b = 3 + Math.floor(Math.random() * 4); b > 0; b--) {
+          pickOne(snowy ? DEADS : stormy ? DEEPS : straw ? STRAWS : GREENS);
+          rnd(-3, 3); rnd(-2, 2); rnd(-0.55, 0.55); rnd(9, 17);
         }
+        addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
+      for (let i = 0; i < tufts * GRASS_EXTRA; i++) {
+        const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300);
+        addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
+      }
+      grass.tufts.sort((p, q) => p.x - q.x);
     }
-    finishBlades(grass, GRASS_WAVE);
     drifts = snowy ? Array.from({ length: Math.round(WW / 600 * 44) }, () => {
       const y = rnd(-100, WH + 100);
       return { x: rnd(shoreAt(y) + 10, WW + 300), y, rx: rnd(26, 60) * 1.8, ry: rnd(16, 34) * 1.8, a: rnd(0, 3) };
@@ -2810,7 +2801,7 @@ button { touch-action: manipulation; }
   // ---------- dusk and the raccoon ----------
   // A dusk round is dark and warm, with a short sight around the trout and fireflies blinking over the grass
   // (none with reduced motion). The raccoon walks in from the far end of the bank, straight toward the
-  // trout, at RACCOON.speed (a good deal slower than a full flop), slower still in tall grass. It cannot go
+  // trout, at RACCOON.speed (a good deal slower than a full flop). It cannot go
   // into the river, and it catches a trout it reaches on the ground. A trout that keeps flopping to the
   // water gets away; the invisibility bubble stops it in its tracks.
   const RACCOON = { speed: 170, catchR: 26 };
@@ -2825,7 +2816,7 @@ button { touch-action: manipulation; }
     }
     if (invisible > 0 || clock < (r.stun || 0)) return;
     const dx = fish.x - r.x, dy = fish.y - r.y, d = Math.hypot(dx, dy) || 1;
-    const step = Math.min(d, RACCOON.speed * (inTallGrass(r.x, r.y) ? 0.55 : 1) * dt);
+    const step = Math.min(d, RACCOON.speed * dt);
     r.x += dx / d * step; r.y += dy / d * step; r.step += step;
     r.x = Math.max(edgeAt(r.y) + 14, Math.min(TREES - 10, r.x)); // not into the river, not out of the bank
     if (Math.hypot(fish.x - r.x, fish.y - r.y) < RACCOON.catchR && fish.z < 12) {
@@ -3627,7 +3618,6 @@ button { touch-action: manipulation; }
     for (const h of herons) drawHeron(h);
     drawRaccoon();
     drawTrees();
-    drawTall(sec);
     drawShadeCanopies();
     drawNest(sec);
     for (const p of parts) {
@@ -3700,21 +3690,12 @@ button { touch-action: manipulation; }
 
   // ---------- loop ----------
   let last = performance.now();
-  // Smoothed frame interval -> grassThin, with a delay each way so it doesn't flicker. Paused or hidden gaps don't count.
-  function trackFrame(ms) {
-    if (!(ms > 0 && ms < 100) || mode === 'paused') return;
-    frameMs += (ms - frameMs) * FRAME_EASE;
-    const want = grassThin ? frameMs < GRASS_FAST_MS : frameMs > GRASS_SLOW_MS;
-    grassTimer = want ? grassTimer + ms / 1000 : 0;
-    if (grassTimer >= (grassThin ? GRASS_FAST_HOLD : GRASS_SLOW_HOLD)) { grassThin = !grassThin; grassTimer = 0; }
-  }
   function frame(now) {
     // Schedule the next frame first, so one bad frame can't freeze the game.
     requestAnimationFrame(frame);
     // A frame's timestamp can be a little earlier than the time recorded at start-up or on resume;
     // never let the game clock step backward (negative sizes would follow, which canvas rejects).
     const dt = Math.max(0, Math.min(0.033, (now - last) / 1000));
-    trackFrame(now - last);
     last = now;
     if (mode !== 'paused') update(dt);
     draw(now);

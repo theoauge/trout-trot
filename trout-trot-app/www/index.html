@@ -449,16 +449,20 @@ button { touch-action: manipulation; }
   // wind and storm lean) picks a lean frame and is copied from the atlas: one drawImage per tuft.
   let grass = { tufts: [], variants: [], atlas: null };
   const SINT = Array.from({ length: 256 }, (_, i) => Math.sin(i * Math.PI / 128)), SIN_K = 128 / Math.PI; // 256 steps round the circle
-  // The breeze: one slow, smooth value that bends every tuft the same way (SWAY_DIR) by up to SWAY_AMP, then eases
-  // it back upright, never the other way. The time offset by x makes it roll across the bank; each tuft's amount
-  // varies a little (x0.85-1.15). In a storm it points the way the gust does.
-  const SWAY_AMP = 0.22, SWAY_SPEED = 1, SWAY_ROLL = 0.006, SWAY_DIR = 1;
-  const GRASS_EXTRA = 5; // extra tufts from grassRng, as a multiple of the original count (so 6x the v1.1.004 grass in all)
-  const GRASS_V = 24, GRASS_F = 29, GRASS_R = 1.0, GRASS_COLS = 24, GRASS_MAXTURN = 1.5; // variants, lean frames across -R..R (fine steps, as the breeze only uses a small part), atlas columns, widest a blade may turn from straight up
+  // The wind: every tuft leans the same way at any moment. The lean swings smoothly through upright to the other side:
+  // SWAY_DIR x (SWAY_BASE + SWAY_SWING x swayWave(t)), swayWave -1..+1 (SWAY_DIR is +x, the base is a slight bias that
+  // way). The one shared lean picks one atlas frame, and the grass is drawn into a cached layer that is only redrawn
+  // when that frame (or the storm stretch, the camera's reach, the round, the scale or the view width) changes.
+  // SWAY_SPEED 1 = a full swing about every 4.5 s.
+  const SWAY_BASE = 0.08, SWAY_SWING = 0.4, SWAY_SPEED = 1, SWAY_DIR = 1;
+  const swayWave = t => Math.sin(t * 1.4 * SWAY_SPEED) * 0.6 + 0.4 * Math.sin(t * 0.53 * SWAY_SPEED + 1.1); // -1..1
+  const GRASS_MARGIN = 160, GRASS_DEBUG = false; // layer margin each side (world units); GRASS_DEBUG draws "grass r/s" in the corner (test builds only)
+  const GRASS_EXTRA = 6.8; // extra tufts from grassRng, as a multiple of the original count (rounded; 7.8x the v1.1.004 grass in all)
+  const GRASS_V = 24, GRASS_F = 43, GRASS_R = 1.0, GRASS_COLS = 24, GRASS_MAXTURN = 1.5; // variants, lean frames across -R..R (fine steps, as the breeze only uses a small part), atlas columns, widest a blade may turn from straight up
   // Reduced motion: still grass is drawn once into chunks about one screen wide and blitted.
   const GRASS_CHUNK = 512, GRASS_Y0 = -110, GRASS_H = 1040;
-  let grassCache = null, grassDrawn = 0, dprNow = 1;
-  window.__grass = () => ({ tufts: grass.tufts.length, drawn: grassDrawn, atlasMB: grass.atlas ? grass.atlas.cv.width * grass.atlas.cv.height * 4 / 1048576 : 0, chunks: grassCache ? grassCache.chunks.size : 0 }); // for the bot tester
+  let grassCache = null, grassLayer = null, grassDrawn = 0, grassRenders = 0, grassTimes = [], dprNow = 1;
+  window.__grass = () => ({ tufts: grass.tufts.length, drawn: grassDrawn, renders: grassRenders, rps: grassTimes.length, atlasMB: grass.atlas ? grass.atlas.cv.width * grass.atlas.cv.height * 4 / 1048576 : 0, chunks: grassCache ? grassCache.chunks.size : 0 }); // for the bot tester
   // The variants: blades as {c, dx, dy, a, len} around the tuft's base, from the grass's own random stream.
   function makeVariants(G, strawChance, colorFor, lenScale) {
     return Array.from({ length: GRASS_V }, () => {
@@ -467,7 +471,7 @@ button { touch-action: manipulation; }
     return blades;
     });
   }
-  function addTuft(list, x, y, v) { list.push({ x, y, v, p1: x * SWAY_ROLL * SIN_K + 512, p2: (x * SWAY_ROLL * 1.9 + y * 0.002) * SIN_K + 512, amt: 0.85 + 0.3 * (Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) }); }
+  function addTuft(list, x, y, v) { list.push({ x, y, v }); }
   // One tuft per cell: column v % GRASS_COLS, row (v / GRASS_COLS) * GRASS_F + frame; the base sits at (bx, by) in the cell.
   function buildAtlas(sc) {
     let maxLen = 0;
@@ -496,25 +500,22 @@ button { touch-action: manipulation; }
     }
     return { cv, sc, cw, ch, bx: cw / 2, by: up };
   }
-  // Copies the tufts between x0 and x1. `still`: no wave. lx/ly: wind and storm lean (sideways: extra lean frames;
-  // along the blade: the stamp is stretched or squashed from its base).
-  function drawStamps(c2, x0, x1, t, still, lx, ly, dir) {
-    const A = grass.atlas, tufts = grass.tufts, sc = A.sc, amp = SWAY_AMP * dir;
-    const o1 = (t * 0.9 * SWAY_SPEED * SIN_K) % 256, o2 = (t * 0.37 * SWAY_SPEED * SIN_K) % 256, inv = (GRASS_F - 1) / (2 * GRASS_R);
-    const cw = A.cw / sc, ch = A.ch / sc, bx = A.bx / sc, by = A.by / sc, f = ly ? Math.max(0.4, Math.min(1.6, 1 - ly)) : 1;
+  // Copies the tufts between x0 and x1, all from lean frame j; f stretches or squashes each stamp from its base (the
+  // storm's along-the-blade lean).
+  function drawStamps(c2, x0, x1, j, f) {
+    const A = grass.atlas, tufts = grass.tufts, sc = A.sc;
+    const cw = A.cw / sc, ch = A.ch / sc, bx = A.bx / sc, by = A.by / sc;
     let lo = 0, hi = tufts.length, n = 0;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (tufts[mid].x > x0) hi = mid; else lo = mid + 1; }
     for (let i = lo; i < tufts.length; i++) {
       const g = tufts[i];
       if (g.x >= x1) break;
-      let s = lx;
-      if (!still) s += amp * g.amt * (0.5 + 0.3 * SINT[((g.p1 - o1) | 0) & 255] + 0.2 * SINT[((g.p2 - o2) | 0) & 255]); // breeze 0..1
-      const j = s <= -GRASS_R ? 0 : s >= GRASS_R ? GRASS_F - 1 : Math.round((s + GRASS_R) * inv);
       c2.drawImage(A.cv, (g.v % GRASS_COLS) * A.cw, (Math.floor(g.v / GRASS_COLS) * GRASS_F + j) * A.ch, A.cw, A.ch, g.x - bx, g.y - by * f, cw, ch * f);
       n++;
     }
     return n;
   }
+  const GRASS_MID = (GRASS_F - 1) / 2; // the upright frame
   let snowGrain = null; // repeating speckle texture for winter snow, made once per round
   let flowers = []; // spring wildflowers: { kind, x, y, a }
   // Spring ground and river (rounds 200+).
@@ -747,7 +748,7 @@ button { touch-action: manipulation; }
         }
         addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
-      for (let i = 0; i < tuftCount * GRASS_EXTRA; i++) {
+      for (let i = 0, nx = Math.round(tuftCount * GRASS_EXTRA); i < nx; i++) {
         const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300);
         addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
@@ -2108,12 +2109,33 @@ button { touch-action: manipulation; }
     const sc = dprNow * view.s;
     if (!(sc > 0)) return;
     if (!grass.atlas || grass.atlas.sc !== sc) grass.atlas = buildAtlas(sc);
-    const t = reduced ? 0 : sec;
     const windLean = windy() ? windDir * gustNow() * 0.85 : 0; // blades bend along the gust
     const leanX = squall ? squall.vx * 1.5 : 0, leanY = (squall ? squall.vy * 1.5 : 0) + windLean; // in a storm they flatten along the gust
     if (reduced && !leanX && !leanY) { drawGrassStill(sc); return; } // nothing moves: blit the cached chunks
     const dir = squall && Math.abs(squall.vx) > 0.05 ? Math.sign(squall.vx) : SWAY_DIR; // with the gust, never against it
-    grassDrawn = drawStamps(ctx, cam - 20, cam + view.w + 20, t, reduced, leanX, leanY, dir);
+    const s = leanX + (reduced ? 0 : dir * (SWAY_BASE + SWAY_SWING * swayWave(sec)));
+    const j = s <= -GRASS_R ? 0 : s >= GRASS_R ? GRASS_F - 1 : Math.round((s + GRASS_R) * (GRASS_F - 1) / (2 * GRASS_R));
+    const f = leanY ? Math.max(0.4, Math.min(1.6, 1 - Math.round(leanY * 10) / 10)) : 1; // in steps, so it doesn't redraw every frame
+    drawGrassLayer(sec, j, f);
+  }
+
+  // The layer holds the world from `x0` to `x0 + lw` with every tuft in lean frame j and stretch f. It is redrawn only
+  // when one of those changes, the screen would reach past its edge, or the round, finale phase, scale or view width
+  // changed; otherwise it is copied at its own world position, so it stays locked to the world as the camera moves.
+  function drawGrassLayer(sec, j, f) {
+    const sc = grass.atlas.sc, lw = view.w + GRASS_MARGIN * 2, L = grassLayer;
+    if (!L || L.ref !== grass || L.sc !== sc || L.lw !== lw || L.j !== j || L.f !== f || cam - 20 < L.x0 || cam + view.w + 20 > L.x0 + lw) {
+      const c = L && L.sc === sc && L.lw === lw ? L.cv : document.createElement('canvas');
+      if (c.width !== Math.ceil(lw * sc) || c.height !== Math.ceil(GRASS_H * sc)) { c.width = Math.ceil(lw * sc); c.height = Math.ceil(GRASS_H * sc); }
+      const x0 = Math.floor((cam - GRASS_MARGIN) * sc) / sc, g = c.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height);
+      g.setTransform(sc, 0, 0, sc, -x0 * sc, -GRASS_Y0 * sc);
+      grassDrawn = drawStamps(g, x0, x0 + lw, j, f);
+      grassLayer = { cv: c, ref: grass, sc, lw, x0, j, f };
+      grassRenders++; grassTimes.push(sec);
+    }
+    while (grassTimes.length && grassTimes[0] < sec - 1) grassTimes.shift();
+    ctx.drawImage(grassLayer.cv, grassLayer.x0, GRASS_Y0, grassLayer.cv.width / sc, grassLayer.cv.height / sc);
   }
 
   // With reduced motion and no wind or storm the grass holds still, so each chunk of the bank is drawn once
@@ -2130,7 +2152,7 @@ button { touch-action: manipulation; }
         c.width = Math.ceil(GRASS_CHUNK * sc); c.height = Math.ceil(GRASS_H * sc);
         const g = c.getContext('2d');
         g.setTransform(sc, 0, 0, sc, -k * GRASS_CHUNK * sc, -GRASS_Y0 * sc);
-        drawStamps(g, k * GRASS_CHUNK - 30, (k + 1) * GRASS_CHUNK + 30, 0, true, 0, 0, SWAY_DIR);
+        drawStamps(g, k * GRASS_CHUNK - 30, (k + 1) * GRASS_CHUNK + 30, GRASS_MID, 1);
         chunks.set(k, c);
       }
       ctx.drawImage(c, k * GRASS_CHUNK, GRASS_Y0, c.width / sc, c.height / sc);
@@ -2364,7 +2386,7 @@ button { touch-action: manipulation; }
         }
         addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
-      for (let i = 0; i < tufts * GRASS_EXTRA; i++) {
+      for (let i = 0, nx = Math.round(tufts * GRASS_EXTRA); i < nx; i++) {
         const y = G.rnd(-60, WH + 60), x = G.rnd(shoreAt(y) + 12, WW + 300);
         addTuft(grass.tufts, x, y, Math.floor(G.next() * GRASS_V));
       }
@@ -3685,6 +3707,11 @@ button { touch-action: manipulation; }
     if (mode === 'play' && hintOn && level === 1) {
       const p = toScreen((shoreAt(fish.y) + fish.x) / 2, fish.y - 70);
       screenText('← Swipe toward the river', p.x, p.y, 22 * fs);
+    }
+    if (GRASS_DEBUG && mode === 'play') { // how often the grass layer was redrawn in the last second (test builds)
+      ctx.save(); ctx.font = '12px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillText('grass r/s: ' + grassTimes.length, 8, H - 8);
+      ctx.restore();
     }
   }
 
